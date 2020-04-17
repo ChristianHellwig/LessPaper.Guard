@@ -1,0 +1,21 @@
+## Static files
+*
+!/**/
+
+!.github/workflows/dotnetcore.yml
+
+!.gitignore
+!LICENSE
+!README.md
+/**/Debug
+/**/Release
+
+## Add specific files
+!LessPaper.GuardService/LessPaper.GuardService.csproj
+!LessPaper.GuardService.UnitTest/LessPaper.GuardService.UnitTest.csproj
+!LessPaper.GuardService.IntegrationTest/LessPaper.GuardService.IntegrationTest.csproj
+!LessPaper.GuardService.sln
+!LessPaper.GuardService.sln.DotSettings
+
+!/**/*.cs
+
