@@ -1,15 +1,17 @@
 ﻿
 using System.Collections.Generic;
+using LessPaper.Shared.Interfaces.General;
+using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Models.Database.Dtos
 {
-    public class DirectoryDto : MetadataDto
+    public class DirectoryDto : MinimalDirectoryMetadataDto
     {
-        public List<DirectoryDto> Directories { get; set; }
+        public List<MongoDBRef> Directories { get; set; }
 
         public List<FileDto> Files { get; set; }
 
-        
+        public bool IsRootDirectory { get; set; }
 
     }
 }

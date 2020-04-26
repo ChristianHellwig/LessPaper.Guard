@@ -1,16 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
+using LessPaper.Shared.Enums;
 using LessPaper.Shared.Interfaces.General;
+using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Bson.Serialization.Options;
+using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Models.Database.Dtos
 {
-    public class MetadataDto : BaseDto, IMetadata
+    public class MetadataDto : BaseDto
     {
         public string ObjectName { get; set; }
-        public string ObjectId { get; set; }
-        public uint SizeInBytes { get; set; }
-        public DateTime LatestChangeDate { get; set; }
-        public DateTime LatestViewDate { get; set; }
-        public List<PermissionDto> Permissions { get; set; }
+        
+
+        public MongoDBRef Owner { get; set; }
+
     }
 }
