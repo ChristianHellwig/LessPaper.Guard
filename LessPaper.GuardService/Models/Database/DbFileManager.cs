@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Xml.Schema;
 using LessPaper.GuardService.Models.Database.Dtos;
+using LessPaper.GuardService.Models.Database.Helper;
 using LessPaper.GuardService.Models.Database.Implement;
 using LessPaper.Shared.Enums;
 using LessPaper.Shared.Helper;
@@ -18,10 +20,10 @@ namespace LessPaper.GuardService.Models.Database
     {
         private readonly IMongoClient client;
         private readonly IMongoCollection<DirectoryDto> directoryCollection;
-        private readonly IMongoCollection<MinimalUserInformationDto> userCollection;
+        private readonly IMongoCollection<UserDto> userCollection;
 
         public DbFileManager(IMongoClient client, IMongoCollection<DirectoryDto> directoryCollection,
-            IMongoCollection<MinimalUserInformationDto> userCollection)
+            IMongoCollection<UserDto> userCollection)
         {
             this.client = client;
             this.directoryCollection = directoryCollection;
@@ -41,7 +43,7 @@ namespace LessPaper.GuardService.Models.Database
 
                 var result = await directoryCollection.FindOneAndUpdateAsync(
                     x => x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.Write) &&
+                        y.Permission.HasFlag(Permission.ReadWrite) &&
                         y.User == new MongoDBRef("user", requestingUserId)
                 ), update);
 
@@ -58,27 +60,50 @@ namespace LessPaper.GuardService.Models.Database
         }
 
         /// <inheritdoc />
-        public async Task<IPermissionResponse> GetFilePermissions(string requestingUserId, string userId, string[] objectIds)
+        public async Task<IPermissionResponse[]> GetFilePermissions(string requestingUserId, string userId, string[] objectIds)
         {
-
             var filePermissions = await directoryCollection.AsQueryable()
                 .SelectMany(x => x.Files)
                 .Where(x =>
                     objectIds.Contains(x.Id) &&
                     x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.ReadPermissions) &&
+                        (y.Permission.HasFlag(Permission.Read) ||
+                         y.Permission.HasFlag(Permission.ReadPermissions)) &&
                         y.User == new MongoDBRef("user", requestingUserId)
                     ))
                 .Select(x => new
                 {
                     Id = x.Id,
-                    Permissions = x.Permissions
+                    Permissions = x.Permissions.Select(y => new BasicPermissionDto {
+                        Permission = y.Permission,
+                        User = y.User,
+                    }).ToArray()
                 })
                 .ToListAsync();
 
+            // Restrict response to relevant and viewable permissions
+            var responseObj = new List<IPermissionResponse>(filePermissions.Count);
+            if (requestingUserId == userId)
+            {
+                // Require at least a read flag
+                responseObj.AddRange((from directoryPermission in filePermissions
+                    let permissionEntry = directoryPermission.Permissions
+                        .FilterHasPermission(requestingUserId)
+                        .FirstOrDefault()
+                    where permissionEntry != null
+                    select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
+            }
+            else
+            {
+                responseObj.AddRange(from directoryPermission in filePermissions
+                    let permissionEntry = directoryPermission.Permissions
+                        .FilterHasPermission(requestingUserId)
+                        .FirstOrDefault(x => x.User.Id.AsString == userId)
+                    where permissionEntry != null
+                    select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission));
+            }
 
-            return null;
-
+            return responseObj.ToArray();
         }
 
         /// <inheritdoc />
@@ -102,7 +127,7 @@ namespace LessPaper.GuardService.Models.Database
                     .Where(x =>
                         x.Id == directoryId &&
                         x.Permissions.Any(y =>
-                            y.Permission.HasFlag(Permission.Write) &&
+                            y.Permission.HasFlag(Permission.ReadWrite) &&
                             y.User == new MongoDBRef("user", requestingUserId)
                         ))
                     .Select(x => new
@@ -166,11 +191,11 @@ namespace LessPaper.GuardService.Models.Database
                 var updateDirectoryTask = directoryCollection.FindOneAndUpdateAsync(x =>
                    x.Id == directoryId &&
                    x.Permissions.Any(y =>
-                       y.Permission.HasFlag(Permission.Write) &&
+                       y.Permission.HasFlag(Permission.ReadWrite) &&
                        y.User == new MongoDBRef("user", requestingUserId)
                    ), updateFiles);
 
-                var updateQuickNumber = Builders<MinimalUserInformationDto>.Update.Set(x => x.QuickNumber, newQuickNumber);
+                var updateQuickNumber = Builders<UserDto>.Update.Set(x => x.QuickNumber, newQuickNumber);
                 var updateUserTask = userCollection.FindOneAndUpdateAsync(x => x.Id == ownerId, updateQuickNumber);
 
                 await Task.WhenAll(updateDirectoryTask, updateUserTask);
@@ -202,11 +227,14 @@ namespace LessPaper.GuardService.Models.Database
             if (fileDto == null)
                 return null;
 
-            if (!fileDto.Permissions.Any(x =>
-                x.User.Id.AsString == requestingUserId && x.Permission.HasFlag(Permission.ReadPermissions)))
-            {
-                fileDto.Permissions = fileDto.Permissions.Where(x => x.User.Id.AsString == requestingUserId).ToArray();
-            }
+            //if (!fileDto.Permissions.Any(x =>
+            //    x.User.Id.AsString == requestingUserId && x.Permission.HasFlag(Permission.ReadPermissions)))
+            //{
+            //    fileDto.Permissions = fileDto.Permissions.Where(x => x.User.Id.AsString == requestingUserId).ToArray();
+            //}
+
+            fileDto = fileDto.FilterHasPermission(requestingUserId);
+
 
             if (revisionNumber == null)
                 return new File(fileDto);

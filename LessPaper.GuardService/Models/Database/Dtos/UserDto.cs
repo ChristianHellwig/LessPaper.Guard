@@ -4,7 +4,7 @@ using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Models.Database.Dtos
 {
-    public class MinimalUserInformationDto : BaseDto
+    public class UserDto : BaseDto
     {
         public string Email { get; set; }
         

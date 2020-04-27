@@ -13,6 +13,6 @@ namespace LessPaper.GuardService.Models.Database.Dtos
 
         public uint NumberOfChilds { get; set; }
 
-        public DirectoryPermissionDto[] Permissions { get; set; }
+        public BasicPermissionDto[] Permissions { get; set; }
     }
 }

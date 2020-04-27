@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using LessPaper.GuardService.Models.Database.Dtos;
+using LessPaper.GuardService.Models.Database.Helper;
 using LessPaper.GuardService.Models.Database.Implement;
 using LessPaper.Shared.Enums;
 using LessPaper.Shared.Helper;
@@ -44,10 +45,10 @@ namespace LessPaper.GuardService.Models.Database
                 x.Id == directoryId &&
                 x.IsRootDirectory == false &&
                 x.Permissions.Any(y =>
-                    y.Permission.HasFlag(Permission.Write) &&
+                    y.Permission.HasFlag(Permission.ReadWrite) &&
                     y.User == new MongoDBRef("user", requestingUserId)
                 ));
-
+            
             return deleteResult.DeletedCount == 1;
         }
 
@@ -67,27 +68,29 @@ namespace LessPaper.GuardService.Models.Database
 
             try
             {
-                var userIdRef = await directoryCollection
-                    .Find(x => x.Id == parentDirectoryId)
-                    .Project(x => x.Owner)
-                    .FirstAsync();
+                var parentDirectory = await directoryCollection.AsQueryable()
+                    .Where(x =>
+                        x.Id == parentDirectoryId &&
+                        x.Permissions.Any(y =>
+                            y.Permission.HasFlag(Permission.ReadWrite) &&
+                            y.User == new MongoDBRef("user", requestingUserId)
+                        ))
+                    .Select(x => new
+                    {
+                        Owner = x.Owner,
+                        Permissions = x.Permissions
+                    })
+                    .FirstOrDefaultAsync();
 
                 var newDirectory = new DirectoryDto
                 {
                     Id = newDirectoryId,
                     IsRootDirectory = false,
-                    Owner = userIdRef,
+                    Owner = parentDirectory.Owner,
                     ObjectName = directoryName,
                     Directories = new List<MongoDBRef>(),
                     Files = new List<FileDto>(),
-                    Permissions = new[]
-                    {
-                        new DirectoryPermissionDto
-                        {
-                            User = userIdRef,
-                            Permission = Permission.Read | Permission.Write | Permission.ReadPermissions | Permission.WritePermissions
-                        }
-                    },
+                    Permissions = parentDirectory.Permissions
                 };
 
                 var insertDirectoryTask = directoryCollection.InsertOneAsync(newDirectory);
@@ -119,27 +122,49 @@ namespace LessPaper.GuardService.Models.Database
         /// <inheritdoc />
         public async Task<IPermissionResponse[]> GetDirectoryPermissions(string requestingUserId, string userId, string[] objectIds)
         {
-            
-            var directoryPermisssions = await directoryCollection
+            var directoryPermissions = await directoryCollection
                 .AsQueryable()
                 .Where(x =>
                     objectIds.Contains(x.Id) &&
                     x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.ReadPermissions) &&
+                        (
+                            y.Permission.HasFlag(Permission.ReadPermissions) || 
+                            y.Permission.HasFlag(Permission.Read)
+                        ) &&
                         y.User == new MongoDBRef("user", requestingUserId)
                     ))
                 .Select(x => new
                 {
                         Id = x.Id,
-                        Permissions = x.Permissions //.Where(y => y.User == new MongoDBRef("user", requestingUserId))
+                        Permissions = x.Permissions
                 })
                 .ToListAsync();
 
 
+            var responseObj = new List<IPermissionResponse>(directoryPermissions.Count);
+            if (requestingUserId == userId)
+            {
+                // Require at least a read flag
+                responseObj.AddRange((from directoryPermission in directoryPermissions
+                    let permissionEntry = directoryPermission.Permissions
+                        .FilterHasPermission(requestingUserId)
+                        .FirstOrDefault()
+                    where permissionEntry != null
+                    select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
+            }
+            else
+            {
+                // Require ReadPermissions flag
+                responseObj.AddRange((from directoryPermission in directoryPermissions
+                    let permissionEntry = directoryPermission.Permissions
+                        .FilterHasPermission(requestingUserId)
+                        .FirstOrDefault(x => x.User.Id.AsString == userId)
+                    where permissionEntry != null
+                    select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
+            }
 
 
-
-            return null;
+            return responseObj.ToArray();
         }
 
         /// <inheritdoc />
@@ -147,6 +172,7 @@ namespace LessPaper.GuardService.Models.Database
         {
             try
             {
+                // Get Root directory
                 var directory = await directoryCollection.Find(x =>
                     x.Id == directoryId &&
                     x.Permissions.Any(y =>
@@ -157,6 +183,7 @@ namespace LessPaper.GuardService.Models.Database
                 if (directory == null)
                     return null;
 
+                // Get Child directories
                 var childDirectoryIds = directory.Directories.Select(x => x.Id.AsString).ToArray();
                 var directoryDtoChilds = await directoryCollection
                     .AsQueryable()
@@ -169,12 +196,21 @@ namespace LessPaper.GuardService.Models.Database
                         Permissions = x.Permissions
                     }).ToListAsync();
                 
-                
+                // Filter directory permissions
+                foreach (var minimalDirectoryMetadataDto in directoryDtoChilds)
+                    minimalDirectoryMetadataDto.Permissions =
+                        minimalDirectoryMetadataDto.Permissions.FilterHasPermission(requestingUserId);
+
+                // Filter file permissions 
+                directory.Files = directory.Files.FilterHasPermission(requestingUserId);
+
+                // Transform to the business object format
                 var childDirectories = directoryDtoChilds
                     .Select(x => new MinimalDirectoryMetadata(x))
                     .Cast<IMinimalDirectoryMetadata>()
                     .ToArray();
 
+                // Transform to the business object format
                 var childFiles = directory.Files
                     .Select(x => new File(x))
                     .Cast<IFileMetadata>()

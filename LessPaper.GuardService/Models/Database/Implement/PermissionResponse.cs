@@ -9,6 +9,12 @@ namespace LessPaper.GuardService.Models.Database.Implement
 {
     public class PermissionResponse : IPermissionResponse
     {
+        public PermissionResponse(string objectId, Permission permission)
+        {
+            ObjectId = objectId;
+            Permission = permission;
+        }
+
         /// <inheritdoc />
         public string ObjectId { get; }
 

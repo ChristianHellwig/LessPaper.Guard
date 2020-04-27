@@ -7,12 +7,8 @@ using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Models.Database.Dtos
 {
-    public class FilePermissionDto
+    public class FilePermissionDto : BasicPermissionDto
     {
-        public Permission Permission { get; set; }
-
-        public MongoDBRef User { get; set; }
-
         public string EncryptedKey { get; set; }
     }
 }

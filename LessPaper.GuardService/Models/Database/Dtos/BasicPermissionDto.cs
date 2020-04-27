@@ -3,7 +3,7 @@ using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Models.Database.Dtos
 {
-    public class DirectoryPermissionDto
+    public class BasicPermissionDto
     {
         public Permission Permission { get; set; }
 

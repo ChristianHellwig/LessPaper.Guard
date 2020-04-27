@@ -9,9 +9,9 @@ namespace LessPaper.GuardService.Models.Database.Implement
 {
     public class MinimalUserInformation : IMinimalUserInformation
     {
-        private readonly MinimalUserInformationDto dto;
+        private readonly UserDto dto;
 
-        public MinimalUserInformation(MinimalUserInformationDto dto)
+        public MinimalUserInformation(UserDto dto)
         {
             this.dto = dto;
         }

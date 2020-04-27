@@ -37,14 +37,15 @@ namespace LessPaper.GuardService.UnitTest
                 "myblob",
                 "myDoc",
                 10,
-                CryptoHelper.GetSalt(32),
+                CryptoHelper.GetSalt(16),
                 DocumentLanguage.German,
                 ExtensionType.Docx);
 
+            var qq = await x.DbFileManager.GetFilePermissions(userId, userId, new[] {fileId});
             var res = await x.DbFileManager.GetFileMetadata(userId, fileId, 0);
 
             
-            await x.DbDirectoryManager.DeleteDirectory("MY_USER_ID", "ROOT_DIR_ID");
+            await x.DbDirectoryManager.DeleteDirectory(userId, subDirId);
         }
     }
 }
