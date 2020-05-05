@@ -13,8 +13,8 @@ namespace LessPaper.GuardService.Models.Database.Dtos
     {
         public string ObjectName { get; set; }
         
-
         public MongoDBRef Owner { get; set; }
 
+        public BasicPermissionDto[] Permissions { get; set; }
     }
 }

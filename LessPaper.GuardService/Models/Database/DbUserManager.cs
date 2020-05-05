@@ -10,6 +10,7 @@ using LessPaper.Shared.Helper;
 using LessPaper.Shared.Interfaces.Database.Manager;
 using LessPaper.Shared.Interfaces.General;
 using MongoDB.Driver;
+using MongoDB.Driver.Linq;
 
 namespace LessPaper.GuardService.Models.Database
 {
@@ -27,15 +28,9 @@ namespace LessPaper.GuardService.Models.Database
         }
 
         /// <inheritdoc />
-        public async Task<bool> InsertUser(string userId, string rootDirectoryId, string email, string hashedPassword, string salt)
+        public async Task<bool> InsertUser(string userId, string rootDirectoryId, string email, string hashedPassword, string salt,
+            string publicKey, string encryptedPrivateKey)
         {
-            if (!IdGenerator.TypeFromId(userId, out var userIdType) || userIdType != IdType.User ||
-                !IdGenerator.TypeFromId(rootDirectoryId, out var rootDirectoryIdType) ||
-                rootDirectoryIdType != IdType.Directory)
-            {
-                return false;
-            }
-
             using (var session = await client.StartSessionAsync())
             {
                 // Begin transaction
@@ -49,9 +44,10 @@ namespace LessPaper.GuardService.Models.Database
                         Id = rootDirectoryId,
                         IsRootDirectory = true,
                         Owner = new MongoDBRef("user", userId),
-                        ObjectName = "__root_dir",
+                        ObjectName = "__root_dir__",
                         Directories = new List<MongoDBRef>(),
                         Files = new List<FileDto>(),
+                        Path = new[] { rootDirectoryId },
                         Permissions = new[]
                         {
                             new BasicPermissionDto
@@ -60,6 +56,7 @@ namespace LessPaper.GuardService.Models.Database
                                 Permission = Permission.Read | Permission.ReadWrite | Permission.ReadPermissions | Permission.ReadWritePermissions
                             }
                         },
+                        
                     };
 
                     var insertRootDirectoryTask = directoryCollection.InsertOneAsync(session, newRootDirectory);
@@ -71,7 +68,8 @@ namespace LessPaper.GuardService.Models.Database
                         Email = email,
                         PasswordHash = hashedPassword,
                         Salt = salt,
-                        PublicKey = CryptoHelper.GenerateRsaKeyPair().PublicKey
+                        PublicKey = publicKey,
+                        EncryptedPrivateKey = encryptedPrivateKey
                     };
 
                     var insertUserTask = userCollection.InsertOneAsync(session, newUser);
@@ -92,32 +90,45 @@ namespace LessPaper.GuardService.Models.Database
         }
 
         /// <inheritdoc />
-        public async Task<bool> DeleteUser(string requestingUserId, string userId)
+        public async Task<string[]> DeleteUser(string requestingUserId, string userId)
         {
-            if (requestingUserId != userId ||
-                 IdGenerator.TypeFromId(requestingUserId, out var requestingUserIdType) && requestingUserIdType != IdType.User ||
-                 IdGenerator.TypeFromId(userId, out var userIdType) && userIdType != IdType.User)
+            if (requestingUserId != userId)
+                return null;
+
+            using var session = await client.StartSessionAsync();
+            session.StartTransaction();
+
+            try
             {
-                return false;
+                var fileBlobs = await directoryCollection.AsQueryable()
+                    .Where(x => x.Owner.Id.AsString == userId)
+                    .SelectMany(x => x.Files)
+                    .SelectMany(x => x.Revisions)
+                    .Select(x => x.BlobId)
+                    .ToListAsync();
+                
+                var deleteDirectoriesTask = directoryCollection.DeleteManyAsync(session,
+                    directory => directory.Owner == new MongoDBRef("user", userId));
+                var deleteUserTask = userCollection.DeleteOneAsync(session,user => user.Id == userId);
+
+                await Task.WhenAll(deleteDirectoriesTask, deleteUserTask);
+                await session.CommitTransactionAsync();
+
+                return fileBlobs.ToArray();
             }
-
-            var deleteDirectoriesTask = directoryCollection.DeleteManyAsync(directory => directory.Owner == new MongoDBRef("user", userId));
-            var deleteUserTask = userCollection.DeleteOneAsync(user => user.Id == userId);
-
-            await Task.WhenAll(deleteDirectoriesTask, deleteUserTask);
-
-            return true;
+            catch (Exception e)
+            {
+                Console.WriteLine("Error writing to MongoDB: " + e.Message);
+                await session.AbortTransactionAsync();
+                return null;
+            }
         }
 
         /// <inheritdoc />
         public async Task<IMinimalUserInformation> GetBasicUserInformation(string requestingUserId, string userId)
         {
-            if (requestingUserId != userId ||
-                IdGenerator.TypeFromId(requestingUserId, out var requestingUserIdType) && requestingUserIdType != IdType.User ||
-                IdGenerator.TypeFromId(userId, out var userIdType) && userIdType != IdType.User)
-            {
+            if (requestingUserId != userId)
                 return null;
-            }
 
             var userInformationDto = await userCollection.Find(user => user.Id == userId).FirstOrDefaultAsync();
             return userInformationDto == null ? null : new MinimalUserInformation(userInformationDto);

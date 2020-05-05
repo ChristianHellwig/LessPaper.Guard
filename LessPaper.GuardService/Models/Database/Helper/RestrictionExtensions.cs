@@ -10,25 +10,38 @@ namespace LessPaper.GuardService.Models.Database.Helper
 {
     public static class RestrictionExtensions
     {
-        public static List<FileDto> FilterHasPermission(this List<FileDto> files, string userId)
+        public static List<FileDto> RestrictPermissions(this List<FileDto> files, string userId)
         {
-            foreach (var fileDto in files)
-            {
-                fileDto.Permissions =
-                    fileDto.Permissions.FilterHasPermission(userId).Cast<FilePermissionDto>().ToArray();
-            }
-
-            return files;
+            return files.Select(x => x.RestrictPermissions(userId)).ToList();
         }
 
-        public static FileDto FilterHasPermission(this FileDto file, string userId)
+        public static FileDto RestrictPermissions(this FileDto file, string userId)
         {
-            file.Permissions = file.Permissions.FilterHasPermission(userId).Cast<FilePermissionDto>().ToArray();
+            file.Permissions = file.Permissions.RestrictPermissions(userId).ToArray();
+            return file;
+        }
+
+        public static List<FileDto> RestrictAccessKeys(this List<FileDto> files, string userId)
+        {
+            return files.Select(x => x.RestrictAccessKeys(userId)).ToList();
+        }
+
+        public static FileDto RestrictAccessKeys(this FileDto file, string userId)
+        {
+            foreach (var fileRevisionDto in file.Revisions)
+            {
+                var accessKeyForRequestingUser = fileRevisionDto.AccessKeys.FirstOrDefault(x => x.User.Id.AsString == userId);
+                if (accessKeyForRequestingUser == null)
+                    continue;
+
+                fileRevisionDto.AccessKeys = new[] { accessKeyForRequestingUser };
+            }
+
             return file;
         }
 
 
-        public static BasicPermissionDto[] FilterHasPermission(this BasicPermissionDto[] permissionDtos, string userId)
+        public static BasicPermissionDto[] RestrictPermissions(this BasicPermissionDto[] permissionDtos, string userId)
         {
             var permissionEntry = permissionDtos.FirstOrDefault(x => x.User.Id.AsString == userId);
             if (permissionEntry == null)

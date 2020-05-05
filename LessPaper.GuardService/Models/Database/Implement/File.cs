@@ -17,7 +17,11 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public File(FileDto dto) : base(dto)
         {
             this.dto = dto;
-            
+            Revisions = dto.Revisions
+                .Select(x => new FileRevision(x))
+                .Cast<IFileRevision>()
+                .ToArray();
+
         }
 
         /// <inheritdoc />
@@ -30,18 +34,13 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public string ThumbnailId => dto.ThumbnailId;
 
         /// <inheritdoc />
-        public IFileRevision[] Revisions => null;
-
-        /// <inheritdoc />
-        public string[] ParentDirectoryIds => dto.ParentDirectoryIds;
-
+        public IFileRevision[] Revisions { get; }
+        
         /// <inheritdoc />
         public ITag[] Tags => dto.Tags;
 
         /// <inheritdoc />
         public DocumentLanguage Language => dto.Language;
 
-        /// <inheritdoc />
-        public Dictionary<string, IFilePermission> Permissions { get; }
     }
 }

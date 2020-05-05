@@ -31,7 +31,7 @@ namespace LessPaper.GuardService.Models.Database
         }
 
         /// <inheritdoc />
-        public async Task<bool> DeleteFile(string requestingUserId, string fileId)
+        public async Task<string[]> Delete(string requestingUserId, string fileId)
         {
             using var session = await client.StartSessionAsync();
             session.StartTransaction();
@@ -41,26 +41,34 @@ namespace LessPaper.GuardService.Models.Database
                 var update = Builders<DirectoryDto>.Update.PullFilter(p => p.Files,
                     f => f.Id == fileId);
 
-                var result = await directoryCollection.FindOneAndUpdateAsync(
+                var result = await directoryCollection.FindOneAndUpdateAsync(session,
                     x => x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.ReadWrite) &&
                         y.User == new MongoDBRef("user", requestingUserId)
                 ), update);
 
 
+                var directoryOfDeletedFile = result.Files.FirstOrDefault(x => x.Id == fileId);
+                if (directoryOfDeletedFile == null)
+                {
+                    await session.AbortTransactionAsync();
+                    return null;
+                }
+
+                
                 await session.CommitTransactionAsync();
-                return true;
+                return directoryOfDeletedFile.Revisions.Select(x => x.BlobId).ToArray();
             }
             catch (Exception e)
             {
                 Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return false;
+                return null;
             }
         }
 
         /// <inheritdoc />
-        public async Task<IPermissionResponse[]> GetFilePermissions(string requestingUserId, string userId, string[] objectIds)
+        public async Task<IPermissionResponse[]> GetPermissions(string requestingUserId, string userId, string[] objectIds)
         {
             var filePermissions = await directoryCollection.AsQueryable()
                 .SelectMany(x => x.Files)
@@ -88,7 +96,7 @@ namespace LessPaper.GuardService.Models.Database
                 // Require at least a read flag
                 responseObj.AddRange((from directoryPermission in filePermissions
                     let permissionEntry = directoryPermission.Permissions
-                        .FilterHasPermission(requestingUserId)
+                        .RestrictPermissions(requestingUserId)
                         .FirstOrDefault()
                     where permissionEntry != null
                     select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
@@ -97,7 +105,7 @@ namespace LessPaper.GuardService.Models.Database
             {
                 responseObj.AddRange(from directoryPermission in filePermissions
                     let permissionEntry = directoryPermission.Permissions
-                        .FilterHasPermission(requestingUserId)
+                        .RestrictPermissions(requestingUserId)
                         .FirstOrDefault(x => x.User.Id.AsString == userId)
                     where permissionEntry != null
                     select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission));
@@ -107,7 +115,34 @@ namespace LessPaper.GuardService.Models.Database
         }
 
         /// <inheritdoc />
-        public async Task<int> InsertFile(
+        public async Task<bool> Rename(string requestingUserId, string objectId, string newName)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> Move(string requestingUserId, string objectId, string targetDirectoryId)
+        {
+
+
+
+            throw new NotImplementedException();
+        }
+
+        /// <inheritdoc />
+        public async Task<PrepareShareData[]> PrepareShare(string requestingUserId, string objectId, string[] userEmails)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> Share(string requestingUserId, ShareData[] shareData)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <inheritdoc />
+        public async Task<uint> InsertFile(
             string requestingUserId,
             string directoryId,
             string fileId,
@@ -138,7 +173,7 @@ namespace LessPaper.GuardService.Models.Database
                     .FirstOrDefaultAsync();
 
                 if (directory == null)
-                    return -1;
+                    return 0;
 
                 var ownerId = directory.Owner.Id.AsString;
 
@@ -164,7 +199,7 @@ namespace LessPaper.GuardService.Models.Database
                     Extension = fileExtension,
                     Owner = directory.Owner,
                     ObjectName = fileName,
-                    ParentDirectoryIds = new[] { directoryId },
+                    //ParentDirectoryIds = new[] { directoryId },
                     Revisions = new[]
                     {
                         new FileRevisionDto
@@ -172,23 +207,22 @@ namespace LessPaper.GuardService.Models.Database
                             SizeInBytes = (uint)fileSize,
                             ChangeDate = DateTime.UtcNow,
                             RevisionNumber = 0,
-                            BlobId = blobId
+                            BlobId = blobId,
+                            AccessKeys = directory.Permissions.Where(x => publicKeyDict.ContainsKey(x.User.Id.AsString))
+                                .Select(x => new AccessKeyDto()
+                                {
+                                    User = x.User,
+                                    SymmetricEncryptedFileKey = CryptoHelper.RsaEncrypt(publicKeyDict[x.User.Id.AsString].PublicKey, encryptedKey)
+                                }).ToArray(),
                         }
                     },
-                    Permissions = directory.Permissions
-                        .Where(x => publicKeyDict.ContainsKey(x.User.Id.AsString))
-                        .Select(x => new FilePermissionDto
-                        {
-                            User = x.User,
-                            Permission = x.Permission,
-                            EncryptedKey = CryptoHelper.RsaEncrypt(publicKeyDict[x.User.Id.AsString].PublicKey, encryptedKey)
-                        }).ToArray(),
+                    Permissions = directory.Permissions,
                     Tags = new ITag[0],
                     QuickNumber = newQuickNumber
                 };
 
                 var updateFiles = Builders<DirectoryDto>.Update.Push(e => e.Files, file);
-                var updateDirectoryTask = directoryCollection.FindOneAndUpdateAsync(x =>
+                var updateDirectoryTask = directoryCollection.FindOneAndUpdateAsync(session,x =>
                    x.Id == directoryId &&
                    x.Permissions.Any(y =>
                        y.Permission.HasFlag(Permission.ReadWrite) &&
@@ -196,11 +230,11 @@ namespace LessPaper.GuardService.Models.Database
                    ), updateFiles);
 
                 var updateQuickNumber = Builders<UserDto>.Update.Set(x => x.QuickNumber, newQuickNumber);
-                var updateUserTask = userCollection.FindOneAndUpdateAsync(x => x.Id == ownerId, updateQuickNumber);
+                var updateUserTask = userCollection.FindOneAndUpdateAsync(session,x => x.Id == ownerId, updateQuickNumber);
 
                 await Task.WhenAll(updateDirectoryTask, updateUserTask);
                 await session.CommitTransactionAsync();
-                return 0;
+                return newQuickNumber;
             }
             catch (Exception e)
             {
@@ -227,15 +261,9 @@ namespace LessPaper.GuardService.Models.Database
             if (fileDto == null)
                 return null;
 
-            //if (!fileDto.Permissions.Any(x =>
-            //    x.User.Id.AsString == requestingUserId && x.Permission.HasFlag(Permission.ReadPermissions)))
-            //{
-            //    fileDto.Permissions = fileDto.Permissions.Where(x => x.User.Id.AsString == requestingUserId).ToArray();
-            //}
-
-            fileDto = fileDto.FilterHasPermission(requestingUserId);
-
-
+            fileDto = fileDto.RestrictPermissions(requestingUserId);
+            fileDto = fileDto.RestrictAccessKeys(requestingUserId);
+            
             if (revisionNumber == null)
                 return new File(fileDto);
             

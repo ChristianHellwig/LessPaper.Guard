@@ -15,6 +15,10 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public Metadata(MetadataDto dto)
         {
             this.dto = dto;
+
+            Permissions = dto.Permissions.ToDictionary(
+                x => x.User.Id.AsString,
+                x => x.Permission);
         }
 
         /// <inheritdoc />
@@ -22,6 +26,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
 
         /// <inheritdoc />
         public string ObjectId => dto.Id;
-        
+
+        /// <inheritdoc />
+        public Dictionary<string, Permission> Permissions { get; }
     }
 }

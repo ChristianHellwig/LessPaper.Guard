@@ -15,5 +15,7 @@ namespace LessPaper.GuardService.Models.Database.Dtos
         public DateTime ChangeDate { get; set; }
 
         public string BlobId { get; set; }
+
+        public AccessKeyDto[] AccessKeys { get; set; }
     }
 }

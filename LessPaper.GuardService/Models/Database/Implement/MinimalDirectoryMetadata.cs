@@ -16,11 +16,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
             this.dto = dto;
         }
         
-
         /// <inheritdoc />
         public uint NumberOfChilds => dto.NumberOfChilds;
 
-        /// <inheritdoc />
-        public Dictionary<string, Permission> Permissions { get; }
     }
 }

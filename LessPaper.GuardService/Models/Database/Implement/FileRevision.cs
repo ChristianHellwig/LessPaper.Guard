@@ -15,6 +15,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public FileRevision(FileRevisionDto dto)
         {
             this.dto = dto;
+
+            AccessKeys = dto.AccessKeys.ToDictionary(x => x.User.Id.AsString, x => (IAccessKey) new AccessKey(x));
         }
 
         /// <inheritdoc />
@@ -28,5 +30,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
 
         /// <inheritdoc />
         public string BlobId => dto.BlobId;
+
+        /// <inheritdoc />
+        public Dictionary<string, IAccessKey> AccessKeys { get; }
     }
 }

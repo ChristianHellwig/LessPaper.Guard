@@ -16,5 +16,7 @@ namespace LessPaper.GuardService.Models.Database.Dtos
 
         public string PublicKey { get; set; }
         public uint QuickNumber { get; set; }
+
+        public string EncryptedPrivateKey { get; set; }
     }
 }

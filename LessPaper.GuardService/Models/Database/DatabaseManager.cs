@@ -18,11 +18,12 @@ namespace LessPaper.GuardService.Models.Database
         public DatabaseManager()
         {
             //var cs = "mongodb://user1:masterkey@127.0.0.1:27017?retryWrites=false";
-            var cs = "mongodb://192.168.0.227:27017?retryWrites=false";
+            var cs = "mongodb://192.168.0.227:28017?retryWrites=false";
 
 
             var mongoClientSettings = MongoClientSettings.FromUrl(new MongoUrl(cs));
             mongoClientSettings.RetryWrites = false;
+            //mongoClientSettings.ReadPreference = ReadPreference.PrimaryPreferred;
 
             mongoClientSettings.ClusterConfigurator = cb => {
                 cb.Subscribe<CommandStartedEvent>(e => {
@@ -33,6 +34,7 @@ namespace LessPaper.GuardService.Models.Database
 
 
             var db = dbClient.GetDatabase("lesspaper");
+            
 
             var userCollection = db.GetCollection<UserDto>("user");
             var directoryCollection = db.GetCollection<DirectoryDto>("directories");
@@ -43,6 +45,15 @@ namespace LessPaper.GuardService.Models.Database
                 new CreateIndexOptions { Unique = true });
             
             userCollection.Indexes.CreateOne(uniqueEmail);
+
+            var uniqueDirectoryName = new CreateIndexModel<DirectoryDto>(
+                Builders<DirectoryDto>.IndexKeys.Combine(
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ObjectName),
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.Owner)
+                ),
+                new CreateIndexOptions { Unique = true });
+
+            directoryCollection.Indexes.CreateOne(uniqueDirectoryName);
 
             DbFileManager = new DbFileManager(dbClient, directoryCollection, userCollection);
             DbDirectoryManager = new DbDirectoryManager(dbClient, directoryCollection);

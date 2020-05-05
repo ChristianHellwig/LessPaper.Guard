@@ -13,5 +13,6 @@ namespace LessPaper.GuardService.Models.Database.Dtos
 
         public bool IsRootDirectory { get; set; }
 
+        public string[] Path { get; set; }
     }
 }

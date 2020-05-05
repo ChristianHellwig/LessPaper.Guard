@@ -27,5 +27,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
 
         /// <inheritdoc />
         public string RootDirectoryId => dto.RootDirectory.Id.AsString;
+
+        /// <inheritdoc />
+        public string EncryptedPrivateKey => dto.EncryptedPrivateKey;
     }
 }
