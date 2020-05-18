@@ -21,22 +21,18 @@ namespace LessPaper.GuardService.Models.Database.Helper
             return file;
         }
 
-        public static List<FileDto> RestrictAccessKeys(this List<FileDto> files, string userId)
+        public static List<FileRevisionDto> RestrictAccessKeys(this List<FileRevisionDto> files, string userId)
         {
             return files.Select(x => x.RestrictAccessKeys(userId)).ToList();
         }
 
-        public static FileDto RestrictAccessKeys(this FileDto file, string userId)
+        public static FileRevisionDto RestrictAccessKeys(this FileRevisionDto file, string userId)
         {
-            foreach (var fileRevisionDto in file.Revisions)
-            {
-                var accessKeyForRequestingUser = fileRevisionDto.AccessKeys.FirstOrDefault(x => x.User.Id.AsString == userId);
-                if (accessKeyForRequestingUser == null)
-                    continue;
+            var accessKeyForRequestingUser = file.AccessKeys.FirstOrDefault(x => x.User.Id.AsString == userId);
+            if (accessKeyForRequestingUser == null)
+                return file;
 
-                fileRevisionDto.AccessKeys = new[] { accessKeyForRequestingUser };
-            }
-
+            file.AccessKeys = new[] { accessKeyForRequestingUser };
             return file;
         }
 

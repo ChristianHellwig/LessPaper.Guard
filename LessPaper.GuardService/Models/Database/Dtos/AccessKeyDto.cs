@@ -12,12 +12,9 @@ namespace LessPaper.GuardService.Models.Database.Dtos
     {
         public MongoDBRef User { get; set; }
         
-        public string AsymmetricEncryptedFileKey { get; set; }
+        public MongoDBRef Issuer { get; set; }
 
         public string SymmetricEncryptedFileKey { get; set; }
 
-        public string SharedAsymmetricEncryptedKey { get; set; }
-
-        public string SharedSymmetricEncryptedFileKey { get; set; }
     }
 }

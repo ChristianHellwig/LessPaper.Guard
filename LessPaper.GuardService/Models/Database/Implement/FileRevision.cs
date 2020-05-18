@@ -20,7 +20,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
         }
 
         /// <inheritdoc />
-        public uint RevisionNumber => dto.RevisionNumber;
+        public uint QuickNumber => dto.QuickNumber;
+
 
         /// <inheritdoc />
         public uint SizeInBytes => dto.SizeInBytes;
@@ -29,9 +30,9 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public DateTime ChangeDate => dto.ChangeDate;
 
         /// <inheritdoc />
-        public string BlobId => dto.BlobId;
+        public Dictionary<string, IAccessKey> AccessKeys { get; }
 
         /// <inheritdoc />
-        public Dictionary<string, IAccessKey> AccessKeys { get; }
+        public string ObjectId => dto.Id;
     }
 }

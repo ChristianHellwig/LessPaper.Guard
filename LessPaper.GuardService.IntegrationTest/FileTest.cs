@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security;
 using System.Text;
+using System.Threading.Tasks;
 using LessPaper.GuardService.Models.Database.Implement;
 using LessPaper.Shared.Enums;
 using LessPaper.Shared.Helper;
@@ -14,55 +15,47 @@ namespace LessPaper.GuardService.IntegrationTest
 {
     public class FileTest : MongoTestBase
     {
-        protected string User1Directory1Name = "Dir_1";
-        protected string User1Directory1Id = IdGenerator.NewId(IdType.Directory);
-        protected string User1FileName1 = "File1";
-        protected string User1FileId1 = IdGenerator.NewId(IdType.File);
-        protected string User1BlobId1 = IdGenerator.NewId(IdType.FileBlob);
-        protected int User1FileSize1 = 5000000;
-        protected string User1FilePlaintextKey1 = "MasterKey1";
-
-        protected string User1Directory2Name = "Dir_1";
-        protected string User1Directory2Id = IdGenerator.NewId(IdType.Directory);
-        protected string User1FileName2 = "File1";
-        protected string User1FileId2 = IdGenerator.NewId(IdType.File);
-        protected string User1BlobId2 = IdGenerator.NewId(IdType.FileBlob);
-        protected int User1FileSize2 = 5000000;
-        protected string User1FilePlaintextKey2 = "MasterKey1";
-
 
         [Fact]
         public async void FileInsert()
         {
-            Assert.True(await UserManager.InsertUser(User1Id, User1RootDirId, User1Email, User1HashedPassword, User1Salt, User1Keys.PublicKey, User1Keys.PrivateKey));
+            var user1 = await UserManager.GenerateUser();
+            var fileId = IdGenerator.NewId(IdType.File);
+            var revisionId = IdGenerator.NewId(IdType.FileBlob);
+
+            var keys = new Dictionary<string, string>()
+            {
+                { user1.UserId, "EncryptedKey" }
+            };
+            
             var quickNumberFile1 = await FileManager.InsertFile(
-                User1Id,
-                User1RootDirId,
-                User1FileId1,
-                User1BlobId1,
-                User1FileName1,
-                User1FileSize1,
-                User1FilePlaintextKey1,
-                DocumentLanguage.English,
-                ExtensionType.Pdf
-            );
+                user1.UserId,
+               user1.Email,
+                fileId,
+                revisionId,
+               "File1",
+               2000000,
+                keys,
+               DocumentLanguage.English,
+               ExtensionType.Pdf
+           );
 
             var rootDirectory =
-                await DirectoryManager.GetPermissions(User1Id, User1Id, new[] {User1RootDirId});
-            var file1 = await FileManager.GetFileMetadata(User1Id, User1FileId1, null);
+                await DirectoryManager.GetPermissions(user1.UserId, user1.UserId, new[] { user1.RootDirectoryId });
+            var file1 = await FileManager.GetFileMetadata(user1.UserId, fileId, null);
             var fileRevision = file1.Revisions.First();
 
-            Assert.Equal(User1FileId1, file1.ObjectId);
+            Assert.Equal(fileId, file1.ObjectId);
             Assert.Single(file1.Permissions);
             Assert.Equal(
-                rootDirectory.First(x => x.ObjectId == User1RootDirId).Permission,
-                file1.Permissions[User1Id]);
+                rootDirectory.First(x => x.ObjectId == user1.RootDirectoryId).Permission,
+                file1.Permissions[user1.UserId]);
             Assert.Single(file1.Revisions);
             Assert.Equal(1U, quickNumberFile1);
-            Assert.Equal(User1BlobId1, fileRevision.BlobId);
-            Assert.Equal(User1FileName1, file1.ObjectName);
-            Assert.Equal(User1FileSize1, (int)fileRevision.SizeInBytes);
-            Assert.Equal(1U, file1.QuickNumber);
+            Assert.Equal(revisionId, fileRevision.ObjectId);
+            Assert.Equal("File1", file1.ObjectName);
+            Assert.Equal(2000000, (int)fileRevision.SizeInBytes);
+            Assert.Equal(1U, fileRevision.QuickNumber);
             Assert.Equal(DocumentLanguage.English, file1.Language);
             Assert.Equal(ExtensionType.Pdf, file1.Extension);
             Assert.Empty(file1.Tags);
@@ -72,81 +65,97 @@ namespace LessPaper.GuardService.IntegrationTest
         //[Fact]
         public async void FileInsert_QuickNumber()
         {
-            Assert.True(await UserManager.InsertUser(User1Id, User1RootDirId, User1Email, User1HashedPassword, User1Salt, User1Keys.PublicKey, User1Keys.PrivateKey));
-            var quickNumberFile1 = await FileManager.InsertFile(
-                User1Id,
-                User1RootDirId,
-                User1FileId1,
-                User1BlobId1,
-                User1FileName1,
-                User1FileSize1,
-                User1FilePlaintextKey1,
-                DocumentLanguage.German,
-                ExtensionType.Docx
-            );
-            Assert.Equal(0U, quickNumberFile1);
+            var user1 = await UserManager.GenerateUser();
 
-            var quickNumberFile2 = await FileManager.InsertFile(
-                User1Id,
-                User1RootDirId,
-                User1FileId2,
-                User1BlobId2,
-                User1FileName2,
-                User1FileSize2,
-                User1FilePlaintextKey2,
-                DocumentLanguage.German,
-                ExtensionType.Docx
-            );
-            Assert.Equal(1U, quickNumberFile2);
+            for (uint i = 0; i < 5; i++)
+            {
+                var fileId = IdGenerator.NewId(IdType.File);
+                var revisionId = IdGenerator.NewId(IdType.FileBlob);
 
+                var keys = new Dictionary<string, string>()
+                {
+                    { user1.UserId, "EncryptedKey" }
+                };
 
-            var file1 = await FileManager.GetFileMetadata(User1Id, User1FileId1, null);
-            
+                var quickNumberFile1 = await FileManager.InsertFile(
+                    user1.UserId,
+                    user1.Email,
+                    fileId,
+                    revisionId,
+                    "File1",
+                    2000000,
+                    keys,
+                    DocumentLanguage.English,
+                    ExtensionType.Pdf
+                );
+
+                Assert.Equal(i, quickNumberFile1);
+            }
         }
 
         //[Fact]
         public async void FileDelete()
         {
-            Assert.True(await UserManager.InsertUser(User1Id, User1RootDirId, User1Email, User1HashedPassword, User1Salt, User1Keys.PublicKey, User1Keys.PrivateKey));
-            Assert.True(await UserManager.InsertUser(User2Id, User2RootDirId, User2Email, User2HashedPassword, User2Salt, User2Keys.PublicKey, User2Keys.PrivateKey));
+            var user1 = await UserManager.GenerateUser();
+            var fileId = IdGenerator.NewId(IdType.File);
+            var revisionId = IdGenerator.NewId(IdType.FileBlob);
 
-            Assert.True(await DirectoryManager.InsertDirectory(
-                User1Id,
-                User1RootDirId,
-                User1Directory1Name,
-                User1Directory1Id));
+            var keys = new Dictionary<string, string>()
+            {
+                { user1.UserId, "EncryptedKey" }
+            };
 
-            Assert.Equal(new string[0], await DirectoryManager.Delete(User1Id, User1Directory1Id));
+            var quickNumberFile1 = await FileManager.InsertFile(
+                user1.UserId,
+                user1.Email,
+                fileId,
+                revisionId,
+                "File1",
+                2000000,
+                keys,
+                DocumentLanguage.English,
+                ExtensionType.Pdf
+            );
 
-            var directory = await DirectoryManager.GetDirectoryMetadata(User1Id, User1Directory1Id, null);
-            Assert.Null(directory);
+            var deletedBlobs = await FileManager.Delete(user1.UserId, fileId);
+            Assert.Single(deletedBlobs);
+            Assert.Equal(revisionId, deletedBlobs.First());
         }
 
         //[Fact]
         public async void FileGetPermissions()
         {
-            Assert.True(await UserManager.InsertUser(User1Id, User1RootDirId, User1Email, User1HashedPassword, User1Salt, User2Keys.PublicKey, User2Keys.PrivateKey));
-            Assert.True(await UserManager.InsertUser(User2Id, User2RootDirId, User2Email, User2HashedPassword, User2Salt, User2Keys.PublicKey, User2Keys.PrivateKey));
+            var user1 = await UserManager.GenerateUser();
+            var fileId = IdGenerator.NewId(IdType.File);
+            var revisionId = IdGenerator.NewId(IdType.FileBlob);
 
-            Assert.True(await DirectoryManager.InsertDirectory(
-                User1Id,
-                User1RootDirId,
-                User1Directory1Name,
-                User1Directory1Id));
+            var keys = new Dictionary<string, string>()
+            {
+                { user1.UserId, "EncryptedKey" }
+            };
 
-            var directoryPermissions = await DirectoryManager.GetPermissions(User1Id, User1Id,
-                new[] {User1RootDirId, User1Directory1Id});
-
-            var rootDirPermissions = directoryPermissions.First(x => x.ObjectId == User1RootDirId);
-            var subDirPermissions = directoryPermissions.First(x => x.ObjectId == User1Directory1Id);
-
-            Assert.Equal(rootDirPermissions.Permission, subDirPermissions.Permission);
-            Assert.Equal(rootDirPermissions.Permission, 
-                        (Permission.ReadWrite |
-                         Permission.Read |
-                         Permission.ReadPermissions |
-                         Permission.ReadWritePermissions)
+            var quickNumberFile1 = await FileManager.InsertFile(
+                user1.UserId,
+                user1.Email,
+                fileId,
+                revisionId,
+                "File1",
+                2000000,
+                keys,
+                DocumentLanguage.English,
+                ExtensionType.Pdf
             );
+
+
+            var directoryMetadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
+            var fileMetadata = await FileManager.GetFileMetadata(user1.UserId, fileId, revisionId);
+            
+            Assert.Single(fileMetadata.Permissions);
+            Assert.Single(directoryMetadata.Permissions);
+            Assert.Equal(directoryMetadata.Permissions.First().Value, fileMetadata.Permissions.First().Value);
+            Assert.Equal(
+                Permission.ReadWrite | Permission.Read | Permission.ReadPermissions | Permission.ReadWritePermissions, 
+                fileMetadata.Permissions.First().Value);
 
         }
     }

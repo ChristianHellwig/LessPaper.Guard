@@ -8,6 +8,5 @@ namespace LessPaper.GuardService.Models.Database.Dtos
     {
         [BsonId]
         public string Id { get; set; }
-
     }
 }

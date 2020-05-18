@@ -13,6 +13,26 @@ namespace LessPaper.GuardService.IntegrationTest
 {
     public class UserTest : MongoTestBase
     {
+        protected string User1Id = IdGenerator.NewId(IdType.User);
+        protected string User1RootDirId = IdGenerator.NewId(IdType.Directory);
+        protected string User1HashedPassword = "HashedPassword";
+        protected string User1Salt = "Salt";
+        protected string User1Email;
+        protected CryptoHelper.RsaKeyPair User1Keys = CryptoHelper.GenerateRsaKeyPair();
+
+        protected string User2Id = IdGenerator.NewId(IdType.User);
+        protected string User2RootDirId = IdGenerator.NewId(IdType.Directory);
+        protected string User2HashedPassword = "HashedPassword";
+        protected string User2Salt = "Salt";
+        protected string User2Email;
+        protected CryptoHelper.RsaKeyPair User2Keys = CryptoHelper.GenerateRsaKeyPair();
+
+        public UserTest()
+        {
+            User1Email = User1Id + "@test.corp"; 
+            User2Email = User2Id + "@test.corp";
+        }
+
         [Fact]
         public async void UserDuplicateEmail()
         {
@@ -49,14 +69,14 @@ namespace LessPaper.GuardService.IntegrationTest
         {
             Assert.True(await UserManager.InsertUser(User1Id, User1RootDirId, User1Email, User1HashedPassword, User1Salt, User1Keys.PublicKey, User1Keys.PrivateKey));
             Assert.True(await UserManager.InsertUser(User2Id, User2RootDirId, User2Email, User2HashedPassword, User2Salt, User2Keys.PublicKey, User2Keys.PrivateKey));
-            Assert.Equal(new string[0], await UserManager.DeleteUser(User1Id, User2Id));
+            Assert.Empty(await UserManager.DeleteUser(User1Id, User2Id));
         }
 
 
         [Fact]
         public async void UserDeleteNonExisting()
-        {
-            Assert.Equal(new string[0], await UserManager.DeleteUser(User1Id, User2Id));
+        { 
+            Assert.Empty(await UserManager.DeleteUser(User1Id, User2Id));
         }
 
 

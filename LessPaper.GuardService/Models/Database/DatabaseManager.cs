@@ -33,12 +33,20 @@ namespace LessPaper.GuardService.Models.Database
             var dbClient = new MongoClient(mongoClientSettings);
 
 
-            var db = dbClient.GetDatabase("lesspaper");
+            var tables = new MongoTables();
+
+            var db = dbClient.GetDatabase(tables.DatabaseName);
+            EnsureTablesExist(tables, db);
+
+            var userCollection = db.GetCollection<UserDto>(tables.UserTable);
+            var directoryCollection = db.GetCollection<DirectoryDto>(tables.DirectoryTable);
+            var filesCollection = db.GetCollection<FileDto>(tables.FilesTable);
+            var fileRevisionCollection = db.GetCollection<FileRevisionDto>(tables.RevisionTable);
+
             
+            // Create index 
 
-            var userCollection = db.GetCollection<UserDto>("user");
-            var directoryCollection = db.GetCollection<DirectoryDto>("directories");
-
+            #region  - User -
 
             var uniqueEmail = new CreateIndexModel<UserDto>(
                 Builders<UserDto>.IndexKeys.Ascending(x => x.Email),
@@ -46,18 +54,52 @@ namespace LessPaper.GuardService.Models.Database
             
             userCollection.Indexes.CreateOne(uniqueEmail);
 
+            #endregion
+
+            #region - Directory -
+
             var uniqueDirectoryName = new CreateIndexModel<DirectoryDto>(
                 Builders<DirectoryDto>.IndexKeys.Combine(
                     Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ObjectName),
-                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.Owner)
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.Path)
                 ),
                 new CreateIndexOptions { Unique = true });
 
             directoryCollection.Indexes.CreateOne(uniqueDirectoryName);
 
-            DbFileManager = new DbFileManager(dbClient, directoryCollection, userCollection);
-            DbDirectoryManager = new DbDirectoryManager(dbClient, directoryCollection);
-            DbUserManager = new DbUserManager(dbClient, userCollection, directoryCollection);
+            #endregion
+
+            #region - Files -
+
+            var uniqueFileNames = new CreateIndexModel<FileDto>(
+                Builders<FileDto>.IndexKeys.Combine(
+                    Builders<FileDto>.IndexKeys.Ascending(x => x.ObjectName),
+                    Builders<FileDto>.IndexKeys.Ascending(x => x.ParentDirectory)
+                ),
+                new CreateIndexOptions { Unique = true });
+
+            filesCollection.Indexes.CreateOne(uniqueFileNames);
+
+            #endregion
+
+
+            #region - Revision -
+
+            var testIdx = new CreateIndexModel<FileRevisionDto>(
+                Builders<FileRevisionDto>.IndexKeys.Combine(
+                    Builders<FileRevisionDto>.IndexKeys.Ascending(x => x.File)
+                ),
+                new CreateIndexOptions { Unique = true });
+
+            fileRevisionCollection.Indexes.CreateOne(testIdx);
+
+            #endregion
+
+
+
+            DbFileManager = new DbFileManager(tables, dbClient, directoryCollection, userCollection, filesCollection, fileRevisionCollection);
+            DbDirectoryManager = new DbDirectoryManager(tables, dbClient, directoryCollection, userCollection, filesCollection, fileRevisionCollection);
+            DbUserManager = new DbUserManager(tables, dbClient, userCollection, directoryCollection, filesCollection, fileRevisionCollection);
             DbSearchManager = new DbSearchManager(db);
         }
 
@@ -72,5 +114,37 @@ namespace LessPaper.GuardService.Models.Database
 
         /// <inheritdoc />
         public IDbSearchManager DbSearchManager { get; }
+
+        private void EnsureTablesExist(IMongoTables tables, IMongoDatabase db)
+        {
+            try
+            {
+                if (!CollectionExists(db, tables.UserTable))
+                    db.CreateCollection(tables.UserTable);
+
+                if (!CollectionExists(db, tables.DirectoryTable))
+                    db.CreateCollection(tables.DirectoryTable);
+
+                if (!CollectionExists(db, tables.FilesTable))
+                    db.CreateCollection(tables.FilesTable);
+
+                if (!CollectionExists(db, tables.RevisionTable))
+                    db.CreateCollection(tables.RevisionTable);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+
+        public bool CollectionExists(IMongoDatabase database, string collectionName)
+        {
+            var filter = new BsonDocument("name", collectionName);
+            var options = new ListCollectionNamesOptions { Filter = filter };
+
+            return database.ListCollectionNames(options).Any();
+        }
     }
 }

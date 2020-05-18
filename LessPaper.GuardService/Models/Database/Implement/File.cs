@@ -14,19 +14,16 @@ namespace LessPaper.GuardService.Models.Database.Implement
         private readonly FileDto dto;
 
         /// <inheritdoc />
-        public File(FileDto dto) : base(dto)
+        public File(FileDto dto, FileRevisionDto[] revisions) : base(dto)
         {
             this.dto = dto;
-            Revisions = dto.Revisions
+            Revisions = revisions
                 .Select(x => new FileRevision(x))
                 .Cast<IFileRevision>()
                 .ToArray();
 
         }
-
-        /// <inheritdoc />
-        public uint QuickNumber => dto.QuickNumber;
-
+        
         /// <inheritdoc />
         public ExtensionType Extension => dto.Extension;
         

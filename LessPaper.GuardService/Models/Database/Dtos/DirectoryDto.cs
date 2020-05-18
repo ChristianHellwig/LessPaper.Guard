@@ -9,7 +9,7 @@ namespace LessPaper.GuardService.Models.Database.Dtos
     {
         public List<MongoDBRef> Directories { get; set; }
 
-        public List<FileDto> Files { get; set; }
+        public List<MongoDBRef> Files { get; set; }
 
         public bool IsRootDirectory { get; set; }
 

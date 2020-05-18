@@ -16,16 +16,11 @@ namespace LessPaper.GuardService.Models.Database.Implement
             this.dto = dto;
         }
 
-        /// <inheritdoc />
-        public string AsymmetricEncryptedFileKey => dto.AsymmetricEncryptedFileKey;
-
+        
         /// <inheritdoc />
         public string SymmetricEncryptedFileKey => dto.SymmetricEncryptedFileKey;
 
         /// <inheritdoc />
-        public string SharedAsymmetricEncryptedKey => dto.SharedAsymmetricEncryptedKey;
-
-        /// <inheritdoc />
-        public string SharedSymmetricEncryptedFileKey => dto.SharedSymmetricEncryptedFileKey;
+        public string IssuerId => dto.Issuer.Id.AsString;
     }
 }
