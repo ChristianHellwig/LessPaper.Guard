@@ -9,15 +9,13 @@ namespace LessPaper.GuardService.Models.Database.Implement
 {
     public class MinimalDirectoryMetadata : Metadata, IMinimalDirectoryMetadata
     {
-        private readonly MinimalDirectoryMetadataDto dto;
-
-        public MinimalDirectoryMetadata(MinimalDirectoryMetadataDto dto) : base(dto)
+        public MinimalDirectoryMetadata(MetadataDto dto, uint numberOfChilds) : base(dto)
         {
-            this.dto = dto;
+            NumberOfChilds = numberOfChilds;
         }
         
         /// <inheritdoc />
-        public uint NumberOfChilds => dto.NumberOfChilds;
+        public uint NumberOfChilds { get; }
 
     }
 }

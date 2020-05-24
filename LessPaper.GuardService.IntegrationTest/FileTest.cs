@@ -30,7 +30,7 @@ namespace LessPaper.GuardService.IntegrationTest
             
             var quickNumberFile1 = await FileManager.InsertFile(
                 user1.UserId,
-               user1.Email,
+               user1.RootDirectoryId,
                 fileId,
                 revisionId,
                "File1",
@@ -39,6 +39,8 @@ namespace LessPaper.GuardService.IntegrationTest
                DocumentLanguage.English,
                ExtensionType.Pdf
            );
+
+            Assert.Equal(1u, quickNumberFile1);
 
             var rootDirectory =
                 await DirectoryManager.GetPermissions(user1.UserId, user1.UserId, new[] { user1.RootDirectoryId });
@@ -62,12 +64,12 @@ namespace LessPaper.GuardService.IntegrationTest
         }
 
 
-        //[Fact]
+        [Fact]
         public async void FileInsert_QuickNumber()
         {
             var user1 = await UserManager.GenerateUser();
 
-            for (uint i = 0; i < 5; i++)
+            for (uint i = 1; i <= 5; i++)
             {
                 var fileId = IdGenerator.NewId(IdType.File);
                 var revisionId = IdGenerator.NewId(IdType.FileBlob);
@@ -79,10 +81,10 @@ namespace LessPaper.GuardService.IntegrationTest
 
                 var quickNumberFile1 = await FileManager.InsertFile(
                     user1.UserId,
-                    user1.Email,
+                    user1.RootDirectoryId,
                     fileId,
                     revisionId,
-                    "File1",
+                    "File" + i,
                     2000000,
                     keys,
                     DocumentLanguage.English,
@@ -93,7 +95,7 @@ namespace LessPaper.GuardService.IntegrationTest
             }
         }
 
-        //[Fact]
+        [Fact]
         public async void FileDelete()
         {
             var user1 = await UserManager.GenerateUser();
@@ -107,7 +109,7 @@ namespace LessPaper.GuardService.IntegrationTest
 
             var quickNumberFile1 = await FileManager.InsertFile(
                 user1.UserId,
-                user1.Email,
+                user1.RootDirectoryId,
                 fileId,
                 revisionId,
                 "File1",
@@ -117,12 +119,13 @@ namespace LessPaper.GuardService.IntegrationTest
                 ExtensionType.Pdf
             );
 
+            Assert.NotEqual(0u, quickNumberFile1);
             var deletedBlobs = await FileManager.Delete(user1.UserId, fileId);
             Assert.Single(deletedBlobs);
             Assert.Equal(revisionId, deletedBlobs.First());
         }
 
-        //[Fact]
+        [Fact]
         public async void FileGetPermissions()
         {
             var user1 = await UserManager.GenerateUser();
@@ -136,7 +139,7 @@ namespace LessPaper.GuardService.IntegrationTest
 
             var quickNumberFile1 = await FileManager.InsertFile(
                 user1.UserId,
-                user1.Email,
+                user1.RootDirectoryId,
                 fileId,
                 revisionId,
                 "File1",

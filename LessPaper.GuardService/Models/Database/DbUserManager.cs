@@ -107,29 +107,28 @@ namespace LessPaper.GuardService.Models.Database
         {
             if (requestingUserId != userId)
                 return null;
+            
 
             using var session = await client.StartSessionAsync();
             session.StartTransaction();
 
             try
-            { 
-                var deleteRevisionsTask = fileRevisionCollection.DeleteManyAsync(session,
-                    directory => directory.Owner.Id.AsString == userId);
-
-                //var revisionIdsx = await fileRevisionCollection.Find(x => x.QuickNumber == 0).ToListAsync();
-
+            {
                 var mRef = new MongoDBRef(tables.UserTable, userId);
                 var revisionIds = await fileRevisionCollection
                     .AsQueryable()
                     .Where(x => x.Owner == mRef)
                     .Select(x => x.Id)
                     .ToListAsync();
-                
+
+                var deleteRevisionsTask = fileRevisionCollection.DeleteManyAsync(session,
+                    directory => directory.Owner == mRef);
+
                 var deleteFilesTask = filesCollection.DeleteManyAsync(session,
-                    directory => directory.Owner.Id.AsString == userId);
+                    directory => directory.Owner == mRef);
 
                 var deleteDirectoriesTask = directoryCollection.DeleteManyAsync(session,
-                    directory => directory.Owner.Id.AsString == userId);
+                    directory => directory.Owner == mRef);
 
                 var deleteUserTask = userCollection.DeleteOneAsync(session, user => user.Id == userId);
 

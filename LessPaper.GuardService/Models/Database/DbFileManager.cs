@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Schema;
@@ -13,6 +14,7 @@ using LessPaper.Shared.Interfaces.Database.Manager;
 using LessPaper.Shared.Interfaces.General;
 using LessPaper.Shared.Interfaces.GuardApi.Response;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using MongoDB.Driver.Linq;
 
@@ -44,37 +46,46 @@ namespace LessPaper.GuardService.Models.Database
         }
 
 
+        private class TempRevisionView
+        {
+            public List<MongoDBRef> Revisions { get; set; }
+
+            [BsonId]
+            public string Id { get; set; }
+        }
+
         /// <inheritdoc />
         public async Task<string[]> Delete(string requestingUserId, string fileId)
         {
             using var session = await client.StartSessionAsync();
             session.StartTransaction();
 
+            
+
             try
             {
-                var update = Builders<DirectoryDto>.Update.PullFilter(p => p.Files,
-                    f => f.Id.AsString == fileId);
+
+                var directoryUpdate = Builders<DirectoryDto>.Update.Pull(x => x.Files, new MongoDBRef(tables.FilesTable, fileId));
 
                 var updatedDirectoryTask = directoryCollection.UpdateOneAsync(session,
                     x => x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.ReadWrite) &&
                         y.User == new MongoDBRef(tables.UserTable, requestingUserId)
-                ), update);
+                ), directoryUpdate);
 
-                var revisionsTask = fileRevisionCollection.DeleteManyAsync(session, x => x.File.Id.AsString == fileId);
+                var revisionsTask = fileRevisionCollection.DeleteManyAsync(session, x => x.File == new MongoDBRef(tables.FilesTable, fileId));
 
                 var deadRevisions = await filesCollection.FindOneAndDeleteAsync(
                     session,
-                    x => x.Id == fileId, new FindOneAndDeleteOptions<FileDto, List<MongoDBRef>>
+                    x => x.Id == fileId, new FindOneAndDeleteOptions<FileDto, TempRevisionView>
                     {
                         Projection = Builders<FileDto>.Projection.Include(x => x.Revisions)
                     });
-
-
+                
                 await Task.WhenAll(updatedDirectoryTask, revisionsTask);
                 await session.CommitTransactionAsync();
 
-                return deadRevisions.Select(x => x.Id.AsString).ToArray();
+                return deadRevisions.Revisions.Select(x => x.Id.AsString).ToArray();
             }
             catch (Exception e)
             {
@@ -380,14 +391,14 @@ namespace LessPaper.GuardService.Models.Database
             if (revisionId == null)
             {
                 // Get all revisions
-                var fileRevisions = await fileRevisionCollection.Find(x => x.File.Id.AsString == fileId).ToListAsync();
+                var fileRevisions = await fileRevisionCollection.Find(x => x.File == new MongoDBRef(tables.FilesTable, fileId)).ToListAsync();
                 fileRevisions = fileRevisions.RestrictAccessKeys(requestingUserId);
                 return new File(fileDto, fileRevisions.ToArray());
             }
 
             // Get single revision
             var fileRevision = await fileRevisionCollection.Find(
-                x => x.File.Id.AsString == fileId && x.Id == revisionId).FirstOrDefaultAsync();
+                x => x.File == new MongoDBRef(tables.FilesTable, fileId) && x.Id == revisionId).FirstOrDefaultAsync();
 
             fileRevision = fileRevision.RestrictAccessKeys(requestingUserId);
             return new File(fileDto, new FileRevisionDto[] { fileRevision });

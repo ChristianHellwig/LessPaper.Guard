@@ -17,21 +17,20 @@ namespace LessPaper.GuardService.IntegrationTest
             var user2 = await UserManager.GenerateUser();
             
             var idA = IdGenerator.NewId(IdType.Directory);
-            var idB = IdGenerator.NewId(IdType.Directory);
-            var idC = IdGenerator.NewId(IdType.Directory);
-
             Assert.True(await DirectoryManager.InsertDirectory(
                 user1.UserId,
                 user1.RootDirectoryId,
                 "A",
                 idA));
 
+            var idB = IdGenerator.NewId(IdType.Directory);
             Assert.True(await DirectoryManager.InsertDirectory(
                 user1.UserId,
                 user1.RootDirectoryId,
                 "B",
                 idB));
 
+            var idC = IdGenerator.NewId(IdType.Directory);
             Assert.True(await DirectoryManager.InsertDirectory(
                 user1.UserId,
                 idA,
@@ -53,8 +52,6 @@ namespace LessPaper.GuardService.IntegrationTest
         [Fact]
         public async void DirectoryMove()
         {
-            var idRoot = IdGenerator.NewId(IdType.Directory);
-
             var user1 = await UserManager.GenerateUser();
 
             var idA = IdGenerator.NewId(IdType.Directory);
@@ -69,14 +66,14 @@ namespace LessPaper.GuardService.IntegrationTest
 
             Assert.True(await DirectoryManager.InsertDirectory(
                 user1.UserId,
-                idRoot,
+                user1.RootDirectoryId,
                 "A",
                 idA));
 
 
             Assert.True(await DirectoryManager.InsertDirectory(
                 user1.UserId,
-                idRoot,
+                user1.RootDirectoryId,
                 "B",
                 idB));
 
@@ -87,7 +84,7 @@ namespace LessPaper.GuardService.IntegrationTest
                 idC));
 
 
-            var rootDirectory = await DirectoryManager.GetDirectoryMetadata(user1.UserId, idRoot, null);
+            var rootDirectory = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
             Assert.Equal(2, rootDirectory.DirectoryChilds.Length);
             Assert.Contains(rootDirectory.DirectoryChilds, x => x.ObjectId == idA);
             Assert.Contains(rootDirectory.DirectoryChilds, x => x.ObjectId == idB);
@@ -114,7 +111,7 @@ namespace LessPaper.GuardService.IntegrationTest
             // |
             // C
 
-            rootDirectory = await DirectoryManager.GetDirectoryMetadata(user1.UserId, idRoot, null);
+            rootDirectory = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
             Assert.Single(rootDirectory.DirectoryChilds);
             Assert.Contains(rootDirectory.DirectoryChilds, x => x.ObjectId == idB);
 
@@ -192,13 +189,37 @@ namespace LessPaper.GuardService.IntegrationTest
                 "Dir1",
                 subDirectoryId));
 
-            var directory = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
-            Assert.Equal(subDirectoryId, directory.ObjectId);
-            Assert.Equal("Dir1", directory.ObjectName);
-            Assert.Empty(directory.DirectoryChilds);
-            Assert.Empty(directory.FileChilds);
-            Assert.Single(directory.Permissions);
-            Assert.True(directory.Permissions[user1.UserId] ==
+            Assert.True(await DirectoryManager.InsertDirectory(
+                user1.UserId,
+                subDirectoryId,
+                "Dir1",
+                IdGenerator.NewId(IdType.Directory)));
+
+
+            var rootDirectoryMetadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
+            Assert.Single(rootDirectoryMetadata.DirectoryChilds);
+            Assert.Equal(1u, rootDirectoryMetadata.NumberOfChilds);
+            var subDirectoryMinimalMetadata = rootDirectoryMetadata.DirectoryChilds.First();
+            Assert.Equal(subDirectoryId, subDirectoryMinimalMetadata.ObjectId);
+            Assert.Equal("Dir1", subDirectoryMinimalMetadata.ObjectName);
+            Assert.Single(subDirectoryMinimalMetadata.Permissions);
+            Assert.Equal(0u, subDirectoryMinimalMetadata.NumberOfChilds);
+            Assert.True(subDirectoryMinimalMetadata.Permissions[user1.UserId] ==
+                        (Permission.ReadWrite |
+                         Permission.Read |
+                         Permission.ReadPermissions |
+                         Permission.ReadWritePermissions)
+            );
+            
+
+            var subDirectoryMetadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, subDirectoryId, null);
+            Assert.Equal(subDirectoryId, subDirectoryMetadata.ObjectId);
+            Assert.Equal("Dir1", subDirectoryMetadata.ObjectName);
+            Assert.Empty(subDirectoryMetadata.DirectoryChilds);
+            Assert.Empty(subDirectoryMetadata.FileChilds);
+            Assert.Single(subDirectoryMetadata.Permissions);
+            Assert.Equal(0u, subDirectoryMinimalMetadata.NumberOfChilds);
+            Assert.True(subDirectoryMetadata.Permissions[user1.UserId] ==
                 (Permission.ReadWrite |
                 Permission.Read |
                 Permission.ReadPermissions |
@@ -248,7 +269,7 @@ namespace LessPaper.GuardService.IntegrationTest
 
             var directoryPermissions = await DirectoryManager.GetPermissions(
                 user1.UserId,
-                user1.RootDirectoryId,
+                user1.UserId,
                 new[] { user1.RootDirectoryId, subDirectoryId });
 
             var rootDirPermissions = directoryPermissions.First(x => x.ObjectId == user1.RootDirectoryId);

@@ -61,7 +61,7 @@ namespace LessPaper.GuardService.Models.Database
             var uniqueDirectoryName = new CreateIndexModel<DirectoryDto>(
                 Builders<DirectoryDto>.IndexKeys.Combine(
                     Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ObjectName),
-                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.Path)
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ParentDirectory)
                 ),
                 new CreateIndexOptions { Unique = true });
 
@@ -89,7 +89,7 @@ namespace LessPaper.GuardService.Models.Database
                 Builders<FileRevisionDto>.IndexKeys.Combine(
                     Builders<FileRevisionDto>.IndexKeys.Ascending(x => x.File)
                 ),
-                new CreateIndexOptions { Unique = true });
+                new CreateIndexOptions { Unique = false });
 
             fileRevisionCollection.Indexes.CreateOne(testIdx);
 

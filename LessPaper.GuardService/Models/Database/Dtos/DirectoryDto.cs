@@ -5,7 +5,7 @@ using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Models.Database.Dtos
 {
-    public class DirectoryDto : MinimalDirectoryMetadataDto
+    public class DirectoryDto : MetadataDto
     {
         public List<MongoDBRef> Directories { get; set; }
 
@@ -14,5 +14,7 @@ namespace LessPaper.GuardService.Models.Database.Dtos
         public bool IsRootDirectory { get; set; }
 
         public string[] Path { get; set; }
+
+        public MongoDBRef ParentDirectory { get; set; }
     }
 }

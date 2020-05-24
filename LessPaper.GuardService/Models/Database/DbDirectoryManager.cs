@@ -154,7 +154,8 @@ namespace LessPaper.GuardService.Models.Database
                     Directories = new List<MongoDBRef>(),
                     Files = new List<MongoDBRef>(),
                     Permissions = parentDirectory.Permissions,
-                    Path = newPath.ToArray()
+                    Path = newPath.ToArray(),
+                    ParentDirectory = new MongoDBRef(tables.DirectoryTable, parentDirectoryId)
                 };
 
                 var insertDirectoryTask = directoryCollection.InsertOneAsync(session, newDirectory);
@@ -247,6 +248,8 @@ namespace LessPaper.GuardService.Models.Database
                 if (directory == null)
                     return null;
 
+                
+
                 // Get Child directories
                 var childDirectoryIds = directory.Directories.Select(x => x.Id.AsString).ToArray();
                 var directoryDtoChilds = await directoryCollection
@@ -268,21 +271,10 @@ namespace LessPaper.GuardService.Models.Database
                     minimalDirectoryMetadataDto.Permissions =
                         minimalDirectoryMetadataDto.Permissions.RestrictPermissions(requestingUserId);
 
-                // Filter child files permissions 
-                //directory.Files = directory.Files.RestrictPermissions(requestingUserId);
-                //directory.Files = directory.Files.RestrictAccessKeys(requestingUserId);
-
                 // Transform to the business object format
                 var childDirectories = directoryDtoChilds
-                    .Select(x => new MinimalDirectoryMetadata(x))
-                    .Cast<IMinimalDirectoryMetadata>()
+                    .Select(x => (IMinimalDirectoryMetadata)new MinimalDirectoryMetadata(x, x.NumberOfChilds))
                     .ToArray();
-
-                //// Transform to the business object format
-                //var childFiles = directory.Files
-                //    .Select(x => new File(x))
-                //    .Cast<IFileMetadata>()
-                //    .ToArray();
 
                 var childFiles = new IFileMetadata[0];
 
@@ -379,7 +371,11 @@ namespace LessPaper.GuardService.Models.Database
                 // Add new path
                 var newPath = newParentDirectoryTask.Result.Path.ToList();
                 var addPathUpdate = Builders<DirectoryDto>.Update.PushEach(x => x.Path, newPath, position: 0);
-                var added = await directoryCollection.UpdateManyAsync(session, x => x.Path.Contains(objectId), addPathUpdate);
+                var parentDirectoryUpdate = Builders<DirectoryDto>.Update.Set(x => x.ParentDirectory,
+                    new MongoDBRef(tables.DirectoryTable, targetDirectoryId));
+
+                var mergedUpdate = Builders<DirectoryDto>.Update.Combine(addPathUpdate, parentDirectoryUpdate);
+                var added = await directoryCollection.UpdateManyAsync(session, x => x.Path.Contains(objectId), mergedUpdate);
 
                 // Ensure same amount of documents are modified 
                 if (removed.ModifiedCount != added.ModifiedCount)
@@ -440,7 +436,7 @@ namespace LessPaper.GuardService.Models.Database
                 .Select(x => new
                 {
                     Id = x.Id,
-                    FileId = x.File.Id.AsString,
+                    File = x.File,
                     AccessKeys = x.AccessKeys
                 })
                 .ToListAsync();
@@ -453,10 +449,12 @@ namespace LessPaper.GuardService.Models.Database
                 if (accessKey == null)
                     continue;
 
-                if (!fileKeys.TryGetValue(revision.FileId, out var sharedRevisions))
-                    fileKeys.Add(revision.FileId, new List<IPrepareShareRevision>());
+                var fileId = revision.File.Id.AsString;
 
-                fileKeys[revision.FileId].Add(new PrepareShareRevision(
+                if (!fileKeys.TryGetValue(fileId, out var sharedRevisions))
+                    fileKeys.Add(fileId, new List<IPrepareShareRevision>());
+
+                fileKeys[fileId].Add(new PrepareShareRevision(
                     revision.Id, 
                     new[] { accessKey }));
             }

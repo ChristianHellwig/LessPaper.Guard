@@ -11,7 +11,7 @@ namespace LessPaper.GuardService.Models.Database.Implement
     {
         private readonly DirectoryDto directoryDto;
 
-        public Directory(DirectoryDto directoryDto, IFileMetadata[] fileChilds, IMinimalDirectoryMetadata[] directoryChilds) : base(directoryDto)
+        public Directory(DirectoryDto directoryDto, IFileMetadata[] fileChilds, IMinimalDirectoryMetadata[] directoryChilds) : base(directoryDto, (uint)(fileChilds.Length + directoryChilds.Length))
         {
             this.directoryDto = directoryDto;
             FileChilds = fileChilds;

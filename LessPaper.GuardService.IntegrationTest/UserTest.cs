@@ -69,14 +69,14 @@ namespace LessPaper.GuardService.IntegrationTest
         {
             Assert.True(await UserManager.InsertUser(User1Id, User1RootDirId, User1Email, User1HashedPassword, User1Salt, User1Keys.PublicKey, User1Keys.PrivateKey));
             Assert.True(await UserManager.InsertUser(User2Id, User2RootDirId, User2Email, User2HashedPassword, User2Salt, User2Keys.PublicKey, User2Keys.PrivateKey));
-            Assert.Empty(await UserManager.DeleteUser(User1Id, User2Id));
+            Assert.Null(await UserManager.DeleteUser(User1Id, User2Id));
         }
 
 
         [Fact]
         public async void UserDeleteNonExisting()
         { 
-            Assert.Empty(await UserManager.DeleteUser(User1Id, User2Id));
+            Assert.Empty(await UserManager.DeleteUser(User1Id, User1Id));
         }
 
 
