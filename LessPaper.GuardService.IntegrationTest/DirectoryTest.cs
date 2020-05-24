@@ -188,14 +188,7 @@ namespace LessPaper.GuardService.IntegrationTest
                 user1.RootDirectoryId,
                 "Dir1",
                 subDirectoryId));
-
-            Assert.True(await DirectoryManager.InsertDirectory(
-                user1.UserId,
-                subDirectoryId,
-                "Dir1",
-                IdGenerator.NewId(IdType.Directory)));
-
-
+            
             var rootDirectoryMetadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
             Assert.Single(rootDirectoryMetadata.DirectoryChilds);
             Assert.Equal(1u, rootDirectoryMetadata.NumberOfChilds);

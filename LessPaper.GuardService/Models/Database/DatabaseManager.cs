@@ -60,6 +60,7 @@ namespace LessPaper.GuardService.Models.Database
 
             var uniqueDirectoryName = new CreateIndexModel<DirectoryDto>(
                 Builders<DirectoryDto>.IndexKeys.Combine(
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.Owner),
                     Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ObjectName),
                     Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ParentDirectory)
                 ),
