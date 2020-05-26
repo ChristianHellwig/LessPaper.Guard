@@ -17,8 +17,10 @@ namespace LessPaper.GuardService.Models.Database.Implement
             this.dto = dto;
 
             Permissions = dto.Permissions.ToDictionary(
-                x => x.User.Id.AsString,
+                x => x.UserId,
                 x => x.Permission);
+
+            Path = dto.PathIds.Aggregate("", (current, next) => current + "/" + next);
         }
 
         /// <inheritdoc />
@@ -29,5 +31,8 @@ namespace LessPaper.GuardService.Models.Database.Implement
 
         /// <inheritdoc />
         public Dictionary<string, Permission> Permissions { get; }
+
+        /// <inheritdoc />
+        public string Path { get; }
     }
 }

@@ -28,7 +28,7 @@ namespace LessPaper.GuardService.Models.Database.Helper
 
         public static FileRevisionDto RestrictAccessKeys(this FileRevisionDto file, string userId)
         {
-            var accessKeyForRequestingUser = file.AccessKeys.FirstOrDefault(x => x.User.Id.AsString == userId);
+            var accessKeyForRequestingUser = file.AccessKeys.FirstOrDefault(x => x.UserId == userId);
             if (accessKeyForRequestingUser == null)
                 return file;
 
@@ -39,7 +39,7 @@ namespace LessPaper.GuardService.Models.Database.Helper
 
         public static BasicPermissionDto[] RestrictPermissions(this BasicPermissionDto[] permissionDtos, string userId)
         {
-            var permissionEntry = permissionDtos.FirstOrDefault(x => x.User.Id.AsString == userId);
+            var permissionEntry = permissionDtos.FirstOrDefault(x => x.UserId == userId);
             if (permissionEntry == null)
                 return new BasicPermissionDto[0];
 

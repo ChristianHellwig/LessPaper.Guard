@@ -23,7 +23,7 @@ namespace LessPaper.GuardService.UnitTest
 
             //var x = new DatabaseManager();
 
-            //var userId = IdGenerator.NewId(IdType.User);
+            //var userId = IdGenerator.NewId(IdType.UserId);
             //var rootId = IdGenerator.NewId(IdType.Directory);
             //var subDirId = IdGenerator.NewId(IdType.Directory);
             //var subDirId2 = IdGenerator.NewId(IdType.Directory);

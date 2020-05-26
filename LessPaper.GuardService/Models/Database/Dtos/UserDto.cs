@@ -12,7 +12,7 @@ namespace LessPaper.GuardService.Models.Database.Dtos
         
         public string PasswordHash { get; set; }
         
-        public MongoDBRef RootDirectory { get; set; }
+        public string RootDirectory { get; set; }
 
         public string PublicKey { get; set; }
         public uint QuickNumber { get; set; }

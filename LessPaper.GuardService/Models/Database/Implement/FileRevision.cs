@@ -16,7 +16,7 @@ namespace LessPaper.GuardService.Models.Database.Implement
         {
             this.dto = dto;
 
-            AccessKeys = dto.AccessKeys.ToDictionary(x => x.User.Id.AsString, x => (IAccessKey) new AccessKey(x));
+            AccessKeys = dto.AccessKeys.ToDictionary(x => x.UserId, x => (IAccessKey) new AccessKey(x));
         }
 
         /// <inheritdoc />

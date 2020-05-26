@@ -56,16 +56,16 @@ namespace LessPaper.GuardService.Models.Database
                     {
                         Id = rootDirectoryId,
                         IsRootDirectory = true,
-                        Owner = new MongoDBRef(tables.UserTable, userId),
+                        OwnerId = userId,
                         ObjectName = "__root_dir__",
-                        Directories = new List<MongoDBRef>(),
-                        Files = new List<MongoDBRef>(),
-                        Path = new[] { rootDirectoryId },
+                        DirectoryIds = new List<string>(),
+                        FileIds = new List<string>(),
+                        PathIds = new[] { rootDirectoryId },
                         Permissions = new[]
                         {
                             new BasicPermissionDto
                             {
-                                User = new MongoDBRef(tables.UserTable, userId),
+                                UserId = userId,
                                 Permission = Permission.Read | Permission.ReadWrite | Permission.ReadPermissions | Permission.ReadWritePermissions
                             }
                         },
@@ -77,7 +77,7 @@ namespace LessPaper.GuardService.Models.Database
                     var newUser = new UserDto
                     {
                         Id = userId,
-                        RootDirectory = new MongoDBRef(tables.DirectoryTable, newRootDirectory.Id),
+                        RootDirectory = newRootDirectory.Id,
                         Email = email,
                         PasswordHash = hashedPassword,
                         Salt = salt,
@@ -114,21 +114,20 @@ namespace LessPaper.GuardService.Models.Database
 
             try
             {
-                var mRef = new MongoDBRef(tables.UserTable, userId);
                 var revisionIds = await fileRevisionCollection
                     .AsQueryable()
-                    .Where(x => x.Owner == mRef)
+                    .Where(x => x.OwnerId == userId)
                     .Select(x => x.Id)
                     .ToListAsync();
 
                 var deleteRevisionsTask = fileRevisionCollection.DeleteManyAsync(session,
-                    directory => directory.Owner == mRef);
+                    directory => directory.OwnerId == userId);
 
                 var deleteFilesTask = filesCollection.DeleteManyAsync(session,
-                    directory => directory.Owner == mRef);
+                    directory => directory.OwnerId == userId);
 
                 var deleteDirectoriesTask = directoryCollection.DeleteManyAsync(session,
-                    directory => directory.Owner == mRef);
+                    directory => directory.OwnerId == userId);
 
                 var deleteUserTask = userCollection.DeleteOneAsync(session, user => user.Id == userId);
 

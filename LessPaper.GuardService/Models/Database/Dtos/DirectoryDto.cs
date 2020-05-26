@@ -7,14 +7,11 @@ namespace LessPaper.GuardService.Models.Database.Dtos
 {
     public class DirectoryDto : MetadataDto
     {
-        public List<MongoDBRef> Directories { get; set; }
+        public List<string> DirectoryIds { get; set; }
 
-        public List<MongoDBRef> Files { get; set; }
+        public List<string> FileIds { get; set; }
 
         public bool IsRootDirectory { get; set; }
 
-        public string[] Path { get; set; }
-
-        public MongoDBRef ParentDirectory { get; set; }
     }
 }

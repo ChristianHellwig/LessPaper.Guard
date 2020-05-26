@@ -21,6 +21,6 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public string SymmetricEncryptedFileKey => dto.SymmetricEncryptedFileKey;
 
         /// <inheritdoc />
-        public string IssuerId => dto.Issuer.Id.AsString;
+        public string IssuerId => dto.IssuerId;
     }
 }

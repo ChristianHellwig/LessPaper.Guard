@@ -17,7 +17,7 @@ namespace LessPaper.GuardService.Models.Database.Implement
             this.dto = dto;
         }
 
-        public string ObjectId => dto.User.Id.AsString;
+        public string ObjectId => dto.UserId;
 
         public Permission Permission => dto.Permission;
     }

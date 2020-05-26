@@ -26,7 +26,7 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public string Salt => dto.Salt;
 
         /// <inheritdoc />
-        public string RootDirectoryId => dto.RootDirectory.Id.AsString;
+        public string RootDirectoryId => dto.RootDirectory;
 
         /// <inheritdoc />
         public string EncryptedPrivateKey => dto.EncryptedPrivateKey;

@@ -47,7 +47,7 @@ namespace LessPaper.GuardService.Models.Database.Implement
         public PrepareShareRevision(string revisionId, AccessKeyDto[] accessKey)
         {
             RevisionId = revisionId;
-            AccessKeys = accessKey.ToDictionary(x => x.User.Id.AsString, x => (IAccessKey)new AccessKey(x));
+            AccessKeys = accessKey.ToDictionary(x => x.UserId, x => (IAccessKey)new AccessKey(x));
         }
 
         /// <inheritdoc />

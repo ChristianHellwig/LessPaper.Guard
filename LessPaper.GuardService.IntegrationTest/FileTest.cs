@@ -61,6 +61,7 @@ namespace LessPaper.GuardService.IntegrationTest
             Assert.Equal(DocumentLanguage.English, file1.Language);
             Assert.Equal(ExtensionType.Pdf, file1.Extension);
             Assert.Empty(file1.Tags);
+            Assert.Equal($"/{user1.RootDirectoryId}/{fileId}", file1.Path);
         }
 
 
@@ -161,5 +162,65 @@ namespace LessPaper.GuardService.IntegrationTest
                 fileMetadata.Permissions.First().Value);
 
         }
+
+        [Fact]
+        public async void Move()
+        {
+            var user1 = await UserManager.GenerateUser();
+            var subDirectoryId = IdGenerator.NewId(IdType.Directory);
+
+            Assert.True(await DirectoryManager.InsertDirectory(
+                user1.UserId, 
+                user1.RootDirectoryId, 
+                "Dir1", 
+                subDirectoryId));
+
+            var fileId = IdGenerator.NewId(IdType.File);
+            var revisionId = IdGenerator.NewId(IdType.FileBlob);
+
+            var keys = new Dictionary<string, string>()
+            {
+                { user1.UserId, "EncryptedKey" }
+            };
+
+            var quickNumberFile1 = await FileManager.InsertFile(
+                user1.UserId,
+                user1.RootDirectoryId,
+                fileId,
+                revisionId,
+                "File1",
+                2000000,
+                keys,
+                DocumentLanguage.English,
+                ExtensionType.Pdf
+            );
+
+            // Check if root directory contains the file
+            var directoryMetadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
+            Assert.Single(directoryMetadata.FileChilds);
+            Assert.Equal(fileId, directoryMetadata.FileChilds.First().ObjectId);
+
+            // Check if path is correct
+            var fileMetadata = await FileManager.GetFileMetadata(user1.UserId, fileId, revisionId);
+            Assert.Equal($"/{user1.RootDirectoryId}/{fileId}", fileMetadata.Path);
+            
+            // Move file to sub directory
+            Assert.True(await FileManager.Move(user1.UserId, fileId, subDirectoryId));
+
+            directoryMetadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, subDirectoryId, null);
+            fileMetadata = await FileManager.GetFileMetadata(user1.UserId, fileId, revisionId);
+
+            Assert.Single(directoryMetadata.FileChilds);
+            Assert.Equal(fileId, directoryMetadata.FileChilds.First().ObjectId);
+            Assert.Single(fileMetadata.Permissions);
+            Assert.Single(directoryMetadata.Permissions);
+            Assert.Equal(directoryMetadata.Permissions.First().Value, fileMetadata.Permissions.First().Value);
+            Assert.Equal(
+                Permission.ReadWrite | Permission.Read | Permission.ReadPermissions | Permission.ReadWritePermissions,
+                fileMetadata.Permissions.First().Value);
+            Assert.Equal($"/{user1.RootDirectoryId}/{subDirectoryId}/{fileId}", fileMetadata.Path);
+
+        }
+
     }
 }

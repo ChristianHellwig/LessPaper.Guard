@@ -48,7 +48,7 @@ namespace LessPaper.GuardService.Models.Database
 
         private class TempRevisionView
         {
-            public List<MongoDBRef> Revisions { get; set; }
+            public List<string> RevisionIds { get; set; }
 
             [BsonId]
             public string Id { get; set; }
@@ -65,27 +65,28 @@ namespace LessPaper.GuardService.Models.Database
             try
             {
 
-                var directoryUpdate = Builders<DirectoryDto>.Update.Pull(x => x.Files, new MongoDBRef(tables.FilesTable, fileId));
+                var directoryUpdate = Builders<DirectoryDto>.Update.Pull(x => x.FileIds,  fileId);
 
                 var updatedDirectoryTask = directoryCollection.UpdateOneAsync(session,
                     x => x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.ReadWrite) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId == requestingUserId
                 ), directoryUpdate);
 
-                var revisionsTask = fileRevisionCollection.DeleteManyAsync(session, x => x.File == new MongoDBRef(tables.FilesTable, fileId));
+                var revisionsTask = fileRevisionCollection.DeleteManyAsync(
+                    session, x => x.File ==  fileId);
 
                 var deadRevisions = await filesCollection.FindOneAndDeleteAsync(
                     session,
                     x => x.Id == fileId, new FindOneAndDeleteOptions<FileDto, TempRevisionView>
                     {
-                        Projection = Builders<FileDto>.Projection.Include(x => x.Revisions)
+                        Projection = Builders<FileDto>.Projection.Include(x => x.RevisionIds)
                     });
                 
                 await Task.WhenAll(updatedDirectoryTask, revisionsTask);
                 await session.CommitTransactionAsync();
 
-                return deadRevisions.Revisions.Select(x => x.Id.AsString).ToArray();
+                return deadRevisions.RevisionIds.ToArray();
             }
             catch (Exception e)
             {
@@ -104,7 +105,7 @@ namespace LessPaper.GuardService.Models.Database
                     x.Permissions.Any(y =>
                         (y.Permission.HasFlag(Permission.Read) ||
                          y.Permission.HasFlag(Permission.ReadPermissions)) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId == requestingUserId
                     ))
                 .Select(x => new
                 {
@@ -112,7 +113,7 @@ namespace LessPaper.GuardService.Models.Database
                     Permissions = x.Permissions.Select(y => new BasicPermissionDto
                     {
                         Permission = y.Permission,
-                        User = y.User,
+                        UserId = y.UserId,
                     }).ToArray()
                 })
                 .ToListAsync();
@@ -134,7 +135,7 @@ namespace LessPaper.GuardService.Models.Database
                 responseObj.AddRange(from directoryPermission in filePermissions
                                      let permissionEntry = directoryPermission.Permissions
                                          .RestrictPermissions(requestingUserId)
-                                         .FirstOrDefault(x => x.User.Id.AsString == userId)
+                                         .FirstOrDefault(x => x.UserId == userId)
                                      where permissionEntry != null
                                      select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission));
             }
@@ -151,7 +152,7 @@ namespace LessPaper.GuardService.Models.Database
                 x.Id == objectId &&
                 x.Permissions.Any(y =>
                     y.Permission.HasFlag(Permission.ReadWrite) &&
-                    y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                    y.UserId == requestingUserId
                 ), update);
 
             return updateResult.ModifiedCount == 1;
@@ -160,7 +161,6 @@ namespace LessPaper.GuardService.Models.Database
         /// <inheritdoc />
         public async Task<bool> Move(string requestingUserId, string objectId, string targetDirectoryId)
         {
-
             using var session = await client.StartSessionAsync();
             session.StartTransaction();
 
@@ -168,49 +168,54 @@ namespace LessPaper.GuardService.Models.Database
 
             try
             {
-                var popUpdate = Builders<DirectoryDto>.Update.PullFilter(x => x.Files, x => x.Id.AsString == objectId);
+                var popUpdate = Builders<DirectoryDto>.Update.Pull(x => x.FileIds, objectId);
 
                 // Remove file from directory
                 var removeFileFromOldDirectoryTask = directoryCollection.UpdateOneAsync(session, x =>
                     x.Id != targetDirectoryId &&
-                    x.Files.Contains(new MongoDBRef(tables.FilesTable, objectId)) &&
+                    x.FileIds.Contains(objectId) &&
                     x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.ReadWrite) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId ==  requestingUserId
                     ), popUpdate, cancellationToken: cancellationTokenSource.Token);
 
                 // Add file to directory
                 var addUpdate =
-                    Builders<DirectoryDto>.Update.Push(x => x.Files, new MongoDBRef(tables.FilesTable, objectId));
+                    Builders<DirectoryDto>.Update.Push(x => x.FileIds, objectId);
 
                 var addFileToNewDirectory = await directoryCollection.FindOneAndUpdateAsync(session, x =>
                     x.Id == targetDirectoryId &&
                     x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.ReadWrite) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId ==  requestingUserId
                     ), addUpdate, cancellationToken: cancellationTokenSource.Token);
 
                 // Cancel if the new directory could not be resolved
                 if (addFileToNewDirectory == null)
                 {
                     cancellationTokenSource.Cancel();
+                    //await removeFileFromOldDirectoryTask;
                     await session.AbortTransactionAsync();
                     return false;
                 }
 
 
                 // Update parent directory of file
-                var fileParentDirectoryUpdate = Builders<FileDto>.Update.Set(x => x.ParentDirectory,
-                    new MongoDBRef(tables.DirectoryTable, targetDirectoryId));
+                var fileParentDirectoryUpdate = Builders<FileDto>.Update.Set(x => x.ParentDirectoryId, targetDirectoryId);
 
+                // Update file path
+                var newPath = addFileToNewDirectory.PathIds.ToList();
+                newPath.Add(objectId);
+                var filePathUpdate = Builders<FileDto>.Update.Set(x => x.PathIds, newPath.ToArray());
+
+                // Update permissions to directory permissions
                 var filePermissionsUpdate =
                     Builders<FileDto>.Update.Set(x => x.Permissions, addFileToNewDirectory.Permissions);
-
-                var fileUpdate = Builders<FileDto>.Update.Combine(fileParentDirectoryUpdate, filePermissionsUpdate);
+                
+                var fileUpdate = Builders<FileDto>.Update.Combine(fileParentDirectoryUpdate, filePermissionsUpdate, filePathUpdate);
                 var updateFile = await filesCollection.FindOneAndUpdateAsync(session, x => x.Id == objectId, fileUpdate);
 
-
-                //TODO Revisions need the key if a file is moved in a directory with new people
+                //TODO RevisionIds need the key if a file is moved in a directory with new people
 
 
                 // Wait for tasks
@@ -271,12 +276,13 @@ namespace LessPaper.GuardService.Models.Database
                         x.Id == directoryId &&
                         x.Permissions.Any(y =>
                             y.Permission.HasFlag(Permission.ReadWrite) &&
-                            y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                            y.UserId == requestingUserId
                         ))
                     .Select(x => new
                     {
-                        Owner = x.Owner,
-                        Permissions = x.Permissions
+                        Owner = x.OwnerId,
+                        Permissions = x.Permissions,
+                        Path = x.PathIds
                     })
                     .FirstOrDefaultAsync();
 
@@ -284,33 +290,37 @@ namespace LessPaper.GuardService.Models.Database
                 if (directory == null)
                     return 0;
 
+                var newPath = directory.Path.ToList();
+                newPath.Add(fileId);
+
                 // Insert new file
                 var file = new FileDto
                 {
                     Id = fileId,
                     Language = documentLanguage,
                     Extension = fileExtension,
-                    Owner = directory.Owner,
+                    OwnerId = directory.Owner,
                     ObjectName = fileName,
-                    ParentDirectory = new MongoDBRef(tables.DirectoryTable, directoryId),
-                    Revisions = new[]
+                    ParentDirectoryId = directoryId,
+                    PathIds = newPath.ToArray(),
+                    RevisionIds = new[]
                     {
-                        new MongoDBRef(tables.RevisionTable, blobId)
+                       blobId
                     },
                     Permissions = directory.Permissions,
                     Tags = new ITag[0],
                 };
 
                 var insertFileTask = filesCollection.InsertOneAsync(session, file);
-                var fileRef = new MongoDBRef(tables.FilesTable, fileId);
+             
 
                 // Update directory
-                var updateFiles = Builders<DirectoryDto>.Update.Push(e => e.Files, fileRef);
+                var updateFiles = Builders<DirectoryDto>.Update.Push(e => e.FileIds, fileId);
                 var updateDirectoryTask = directoryCollection.UpdateOneAsync(session, x => x.Id == directoryId, updateFiles);
 
                 // Get user information
-                var ownerId = directory.Owner.Id.AsString;
-                var userIds = directory.Permissions.Select(x => x.User.Id.AsString).ToHashSet();
+                var ownerId = directory.Owner;
+                var userIds = directory.Permissions.Select(x => x.UserId).ToHashSet();
 
                 // Ensure all keys are delivered
                 if (userIds.Count != encryptedKeys.Count || !encryptedKeys.Keys.All(x => userIds.Contains(x)))
@@ -337,16 +347,16 @@ namespace LessPaper.GuardService.Models.Database
                     accessKeys.Add(new AccessKeyDto
                     {
                         SymmetricEncryptedFileKey = encryptedKey,
-                        Issuer = new MongoDBRef(tables.UserTable, requestingUserId),
-                        User = new MongoDBRef(tables.UserTable, userId)
+                        IssuerId =  requestingUserId,
+                        UserId =  userId
                     });
                 }
 
                 var revision = new FileRevisionDto
                 {
                     Id = blobId,
-                    File = fileRef,
-                    Owner = directory.Owner,
+                    File = fileId,
+                    OwnerId = directory.Owner,
                     SizeInBytes = (uint)fileSize,
                     ChangeDate = DateTime.UtcNow,
                     QuickNumber = newQuickNumber,
@@ -378,7 +388,7 @@ namespace LessPaper.GuardService.Models.Database
                     x.Id == fileId &&
                     x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.Read) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId ==  requestingUserId
                 ))
                 .FirstOrDefaultAsync();
 
@@ -391,14 +401,16 @@ namespace LessPaper.GuardService.Models.Database
             if (revisionId == null)
             {
                 // Get all revisions
-                var fileRevisions = await fileRevisionCollection.Find(x => x.File == new MongoDBRef(tables.FilesTable, fileId)).ToListAsync();
+                var fileRevisions = await fileRevisionCollection.Find(x => x.File == fileId).ToListAsync();
                 fileRevisions = fileRevisions.RestrictAccessKeys(requestingUserId);
                 return new File(fileDto, fileRevisions.ToArray());
             }
 
             // Get single revision
             var fileRevision = await fileRevisionCollection.Find(
-                x => x.File == new MongoDBRef(tables.FilesTable, fileId) && x.Id == revisionId).FirstOrDefaultAsync();
+                    x => x.File == fileId && 
+                         x.Id == revisionId
+                     ).FirstOrDefaultAsync();
 
             fileRevision = fileRevision.RestrictAccessKeys(requestingUserId);
             return new File(fileDto, new FileRevisionDto[] { fileRevision });

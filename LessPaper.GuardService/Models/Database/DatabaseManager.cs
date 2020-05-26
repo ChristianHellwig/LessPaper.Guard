@@ -46,7 +46,7 @@ namespace LessPaper.GuardService.Models.Database
             
             // Create index 
 
-            #region  - User -
+            #region  - UserId -
 
             var uniqueEmail = new CreateIndexModel<UserDto>(
                 Builders<UserDto>.IndexKeys.Ascending(x => x.Email),
@@ -60,9 +60,9 @@ namespace LessPaper.GuardService.Models.Database
 
             var uniqueDirectoryName = new CreateIndexModel<DirectoryDto>(
                 Builders<DirectoryDto>.IndexKeys.Combine(
-                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.Owner),
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.OwnerId),
                     Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ObjectName),
-                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ParentDirectory)
+                    Builders<DirectoryDto>.IndexKeys.Ascending(x => x.ParentDirectoryId)
                 ),
                 new CreateIndexOptions { Unique = true });
 
@@ -70,12 +70,12 @@ namespace LessPaper.GuardService.Models.Database
 
             #endregion
 
-            #region - Files -
+            #region - FileIds -
 
             var uniqueFileNames = new CreateIndexModel<FileDto>(
                 Builders<FileDto>.IndexKeys.Combine(
                     Builders<FileDto>.IndexKeys.Ascending(x => x.ObjectName),
-                    Builders<FileDto>.IndexKeys.Ascending(x => x.ParentDirectory)
+                    Builders<FileDto>.IndexKeys.Ascending(x => x.ParentDirectoryId)
                 ),
                 new CreateIndexOptions { Unique = true });
 

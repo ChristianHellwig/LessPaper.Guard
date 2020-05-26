@@ -9,7 +9,7 @@ namespace LessPaper.GuardService.Models.Database.Dtos
 {
     public class FileRevisionDto : BaseDto
     {
-        public MongoDBRef File { get; set; }
+        public string File { get; set; }
         
         public uint SizeInBytes { get; set; }
 
@@ -19,6 +19,6 @@ namespace LessPaper.GuardService.Models.Database.Dtos
 
         public AccessKeyDto[] AccessKeys { get; set; }
 
-        public MongoDBRef Owner { get; set; }
+        public string OwnerId { get; set; }
     }
 }

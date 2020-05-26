@@ -62,7 +62,7 @@ namespace LessPaper.GuardService.Models.Database
                 x.IsRootDirectory == false &&
                 x.Permissions.Any(y =>
                     y.Permission.HasFlag(Permission.ReadWrite) &&
-                    y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                    y.UserId == requestingUserId
                 ));
 
                 // If the result is null permissions are not granted or directory does not exists or is not
@@ -76,11 +76,11 @@ namespace LessPaper.GuardService.Models.Database
                 // Find subdirectories and get a list of all files
                 var subDirectories = await directoryCollection
                     .AsQueryable()
-                    .Where(x => x.Path.Contains(directoryId))
+                    .Where(x => x.PathIds.Contains(directoryId))
                     .Select(x => new
                     {
                         Id = x.Id,
-                        Files = x.Files
+                        Files = x.FileIds
                     })
                     .ToListAsync();
 
@@ -89,19 +89,19 @@ namespace LessPaper.GuardService.Models.Database
                 var deleteDirectoryTask = directoryCollection.DeleteManyAsync(session, x => directoryIds.Contains(x.Id));
 
                 // Delete files
-                var fileRefs = subDirectories.SelectMany(x => x.Files).ToArray();
-                var fileIds = fileRefs.Select(x => x.Id.AsString);
+                var fileIds = subDirectories.SelectMany(x => x.Files).ToArray();
+                
                 var deleteFilesTask = filesCollection.DeleteManyAsync(session, x => fileIds.Contains(x.Id));
 
                 // Get all revisions (in order to remove bucket blobs later on)
                 var revisionIds = await fileRevisionCollection
                     .AsQueryable()
-                    .Where(x => fileRefs.Contains(x.File))
+                    .Where(x => fileIds.Contains(x.File))
                     .Select(x => x.Id)
                     .ToListAsync();
 
                 // Delete file revisions
-                var deleteRevisionsTask = fileRevisionCollection.DeleteManyAsync(session, x => fileRefs.Contains(x.File));
+                var deleteRevisionsTask = fileRevisionCollection.DeleteManyAsync(session, x => fileIds.Contains(x.File));
 
                 await Task.WhenAll(deleteDirectoryTask, deleteFilesTask, deleteRevisionsTask);
                 await session.CommitTransactionAsync();
@@ -129,13 +129,13 @@ namespace LessPaper.GuardService.Models.Database
                         x.Id == parentDirectoryId &&
                         x.Permissions.Any(y =>
                             y.Permission.HasFlag(Permission.ReadWrite) &&
-                            y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                            y.UserId == requestingUserId
                         ))
                     .Select(x => new
                     {
-                        Owner = x.Owner,
+                        Owner = x.OwnerId,
                         Permissions = x.Permissions,
-                        Path = x.Path
+                        Path = x.PathIds
                     })
                     .FirstOrDefaultAsync();
 
@@ -149,19 +149,19 @@ namespace LessPaper.GuardService.Models.Database
                 {
                     Id = newDirectoryId,
                     IsRootDirectory = false,
-                    Owner = parentDirectory.Owner,
+                    OwnerId = parentDirectory.Owner,
                     ObjectName = directoryName,
-                    Directories = new List<MongoDBRef>(),
-                    Files = new List<MongoDBRef>(),
+                    DirectoryIds = new List<string>(),
+                    FileIds = new List<string>(),
                     Permissions = parentDirectory.Permissions,
-                    Path = newPath.ToArray(),
-                    ParentDirectory = new MongoDBRef(tables.DirectoryTable, parentDirectoryId)
+                    PathIds = newPath.ToArray(),
+                    ParentDirectoryId = parentDirectoryId
                 };
 
                 var insertDirectoryTask = directoryCollection.InsertOneAsync(session, newDirectory);
 
                 var update = Builders<DirectoryDto>.Update
-                    .Push(e => e.Directories, new MongoDBRef(tables.DirectoryTable, newDirectoryId));
+                    .Push(e => e.DirectoryIds,  newDirectoryId);
 
                 var updateResultTask = directoryCollection.UpdateOneAsync(session, x => x.Id == parentDirectoryId, update);
 
@@ -196,7 +196,7 @@ namespace LessPaper.GuardService.Models.Database
                             y.Permission.HasFlag(Permission.ReadPermissions) ||
                             y.Permission.HasFlag(Permission.Read)
                         ) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId == requestingUserId
                     ))
                 .Select(x => new
                 {
@@ -223,7 +223,7 @@ namespace LessPaper.GuardService.Models.Database
                 responseObj.AddRange((from directoryPermission in directoryPermissions
                                       let permissionEntry = directoryPermission.Permissions
                                           .RestrictPermissions(requestingUserId)
-                                          .FirstOrDefault(x => x.User.Id.AsString == userId)
+                                          .FirstOrDefault(x => x.UserId == userId)
                                       where permissionEntry != null
                                       select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
             }
@@ -237,53 +237,75 @@ namespace LessPaper.GuardService.Models.Database
         {
             try
             {
-                // Get Root directory
+                // [Optimistic execution] Recieve the files and the revisions
+                var getRawFileChildsTask = filesCollection
+                    .AsQueryable()
+                    .Where(x => x.ParentDirectoryId == directoryId)
+                    .GroupJoin(
+                        fileRevisionCollection,
+                        keySel => keySel.Id,
+                        innerSel => innerSel.File,
+                        (file, revisions) => new
+                        {
+                            File = file,
+                            Revisons = revisions
+                        })
+                    .ToListAsync();
+
+                // Get the directory
                 var directory = await directoryCollection.Find(x =>
                     x.Id == directoryId &&
                     x.Permissions.Any(y =>
                         y.Permission.HasFlag(Permission.Read) &&
-                        y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                        y.UserId == requestingUserId
                     )).FirstOrDefaultAsync();
 
+                // Return null if permissions not granted or directory does not exists
                 if (directory == null)
                     return null;
-
                 
 
                 // Get Child directories
-                var childDirectoryIds = directory.Directories.Select(x => x.Id.AsString).ToArray();
-                var directoryDtoChilds = await directoryCollection
+                var childDirectoryIds = directory.DirectoryIds.ToArray();
+                var directoryDtoChildsTask = directoryCollection
                     .AsQueryable()
                     .Where(x => childDirectoryIds.Contains(x.Id))
                     .Select(x => new MinimalDirectoryMetadataDto()
                     {
-                        NumberOfChilds = (uint)(x.Files.Count + x.Directories.Count),
+                        NumberOfChilds = (uint)(x.FileIds.Count + x.DirectoryIds.Count),
                         Id = x.Id,
                         ObjectName = x.ObjectName,
-                        Permissions = x.Permissions
+                        Permissions = x.Permissions,
+                        PathIds = x.PathIds
                     }).ToListAsync();
+                
+                await Task.WhenAll(directoryDtoChildsTask, getRawFileChildsTask);
 
                 // Filter directory permissions
                 directory.Permissions = directory.Permissions.RestrictPermissions(requestingUserId);
 
                 // Filter child directory permissions
-                foreach (var minimalDirectoryMetadataDto in directoryDtoChilds)
+                foreach (var minimalDirectoryMetadataDto in directoryDtoChildsTask.Result)
                     minimalDirectoryMetadataDto.Permissions =
                         minimalDirectoryMetadataDto.Permissions.RestrictPermissions(requestingUserId);
 
                 // Transform to the business object format
-                var childDirectories = directoryDtoChilds
+                var childDirectories = directoryDtoChildsTask.Result
                     .Select(x => (IMinimalDirectoryMetadata)new MinimalDirectoryMetadata(x, x.NumberOfChilds))
                     .ToArray();
-
-                var childFiles = new IFileMetadata[0];
-
+                
+                var childFiles = getRawFileChildsTask.Result
+                    .Select(x => (IFileMetadata)new File(
+                        x.File.RestrictPermissions(requestingUserId),
+                        x.Revisons.ToArray())
+                    )
+                    .ToArray();
+                
                 return new Directory(directory, childFiles, childDirectories);
             }
             catch (Exception e)
             {
                 Console.WriteLine("Error writing to MongoDB: " + e.Message);
-
                 return null;
             }
         }
@@ -297,7 +319,7 @@ namespace LessPaper.GuardService.Models.Database
                 x.Id == objectId &&
                 x.Permissions.Any(y =>
                     y.Permission.HasFlag(Permission.ReadWrite) &&
-                  y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                  y.UserId ==  requestingUserId
             ), update);
 
             return updateResultTask.ModifiedCount == 1;
@@ -312,9 +334,7 @@ namespace LessPaper.GuardService.Models.Database
             try
             {
                 // Update filter to remove the directory id from the old parent folder
-                var removeDirectoryRefUpdate = Builders<DirectoryDto>.Update.PullFilter(
-                    x => x.Directories,
-                    Builders<MongoDBRef>.Filter.Eq(x => x.Id, new BsonString(objectId)));
+                var removeDirectoryRefUpdate = Builders<DirectoryDto>.Update.Pull(x => x.DirectoryIds, objectId);
 
                 var oldParentDirectoryTask = directoryCollection.FindOneAndUpdateAsync(
                     session,
@@ -325,18 +345,17 @@ namespace LessPaper.GuardService.Models.Database
                      // Ensure user has the rights to move the folder out of the old parent directory
                      x.Permissions.Any(y =>
                          y.Permission.HasFlag(Permission.ReadWrite) &&
-                         y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                         y.UserId == requestingUserId
                      ) &&
 
                     // Ensure that we have the parent by checking if parent contains the subfolder that we want to move 
-                    x.Directories.Contains(new MongoDBRef(tables.DirectoryTable, objectId)),
+                    x.DirectoryIds.Contains(objectId),
                     removeDirectoryRefUpdate);
-
-
+                
                 // Update filter to add the directory id to the new parent folder
                 var addDirectoryRefUpdate = Builders<DirectoryDto>.Update.Push(
-                    e => e.Directories,
-                    new MongoDBRef(tables.DirectoryTable, objectId));
+                    e => e.DirectoryIds,
+                    objectId);
 
                 var newParentDirectoryTask = directoryCollection.FindOneAndUpdateAsync(
                     session,
@@ -347,7 +366,7 @@ namespace LessPaper.GuardService.Models.Database
                          // Ensure user has the rights to move the directory into the folder
                          x.Permissions.Any(y =>
                              y.Permission.HasFlag(Permission.ReadWrite) &&
-                             y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                             y.UserId == requestingUserId
                          ),
                     addDirectoryRefUpdate);
 
@@ -363,22 +382,63 @@ namespace LessPaper.GuardService.Models.Database
 
                 // Going to update the new directory path
 
-                // Remove part of old path
-                var oldPath = oldParentDirectoryTask.Result.Path.ToList();
-                var removePathUpdate = Builders<DirectoryDto>.Update.PullAll(x => x.Path, oldPath);
-                var removed = await directoryCollection.UpdateManyAsync(session, x => x.Path.Contains(objectId), removePathUpdate);
+                // Remove part of old path (excluding the directory-to-move id)
+                var oldPath = oldParentDirectoryTask.Result.PathIds.ToList();
 
-                // Add new path
-                var newPath = newParentDirectoryTask.Result.Path.ToList();
-                var addPathUpdate = Builders<DirectoryDto>.Update.PushEach(x => x.Path, newPath, position: 0);
-                var parentDirectoryUpdate = Builders<DirectoryDto>.Update.Set(x => x.ParentDirectory,
-                    new MongoDBRef(tables.DirectoryTable, targetDirectoryId));
+                // Apply for directories
+                var directoryRemovePathSegmentsUpdate = Builders<DirectoryDto>.Update.PullAll(x => x.PathIds, oldPath);
+                var removedChangedDirectoryDtosTask = directoryCollection.UpdateManyAsync(
+                         session,
+                    x => x.PathIds.Contains(objectId),
+                         directoryRemovePathSegmentsUpdate
+                );
 
-                var mergedUpdate = Builders<DirectoryDto>.Update.Combine(addPathUpdate, parentDirectoryUpdate);
-                var added = await directoryCollection.UpdateManyAsync(session, x => x.Path.Contains(objectId), mergedUpdate);
+                // Apply for files
+                var filesRemovePathSegmentsUpdate = Builders<FileDto>.Update.PullAll(x => x.PathIds, oldPath);
+                var removeChangedFileDtosTask = filesCollection.UpdateManyAsync(
+                    session,
+                    x => x.PathIds.Contains(objectId),
+                    filesRemovePathSegmentsUpdate
+                );
+
+                // Wait for path update for all files and directories
+                await Task.WhenAll(removedChangedDirectoryDtosTask, removeChangedFileDtosTask);
+
+                // Add new path (excluding the directory-to-move id)
+                var newPath = newParentDirectoryTask.Result.PathIds.ToList();
+
+                // Apply for directories
+                var directoriesAddPathSegmentsUpdate = Builders<DirectoryDto>.Update.PushEach(x => x.PathIds, newPath, position: 0);
+                var directoriesParentDirectoryUpdate = Builders<DirectoryDto>.Update.Set(
+                    x => x.ParentDirectoryId, targetDirectoryId);
+
+                var directoriesMergedUpdate = Builders<DirectoryDto>.Update.Combine(directoriesAddPathSegmentsUpdate, directoriesParentDirectoryUpdate);
+                var addChangedDirectoryDtosTask = directoryCollection.UpdateManyAsync(
+                        session,
+                        x => x.PathIds.Contains(objectId),
+                        directoriesMergedUpdate
+                );
+
+                // Apply for files
+                var filesAddPathSegmentsUpdate = Builders<FileDto>.Update.PushEach(x => x.PathIds, newPath, position: 0);
+                var filesParentDirectoryUpdate = Builders<FileDto>.Update.Set(
+                    x => x.ParentDirectoryId,
+                     targetDirectoryId
+                );
+
+                var filesMergedUpdate = Builders<FileDto>.Update.Combine(filesAddPathSegmentsUpdate, filesParentDirectoryUpdate);
+                var addChangedFilesDtosTask = filesCollection.UpdateManyAsync(
+                    session,
+                    x => x.PathIds.Contains(objectId),
+                    filesMergedUpdate
+                );
+
+                // Wait for path update for all files and directories
+                await Task.WhenAll(addChangedDirectoryDtosTask, addChangedFilesDtosTask);
 
                 // Ensure same amount of documents are modified 
-                if (removed.ModifiedCount != added.ModifiedCount)
+                if (removedChangedDirectoryDtosTask.Result.ModifiedCount != addChangedDirectoryDtosTask.Result.ModifiedCount ||
+                    removeChangedFileDtosTask.Result.ModifiedCount != addChangedFilesDtosTask.Result.ModifiedCount)
                 {
                     await session.AbortTransactionAsync();
                     return false;
@@ -403,8 +463,8 @@ namespace LessPaper.GuardService.Models.Database
             // Start file ids query
             var fileIdsTask = directoryCollection
                 .AsQueryable()
-                .Where(x => x.Path.Contains(directoryId))
-                .SelectMany(x => x.Files)
+                .Where(x => x.PathIds.Contains(directoryId))
+                .SelectMany(x => x.FileIds)
                 .ToListAsync(cancellationToken.Token);
 
             // Start user information query
@@ -419,7 +479,7 @@ namespace LessPaper.GuardService.Models.Database
                 x => x.Id == directoryId &&
                      x.Permissions.Any(y =>
                          y.Permission.HasFlag(Permission.ReadWrite) &&
-                         y.User == new MongoDBRef(tables.UserTable, requestingUserId)
+                         y.UserId ==  requestingUserId
                      ));
 
             if (!hasPermissionsOnRootFolder)
@@ -445,20 +505,20 @@ namespace LessPaper.GuardService.Models.Database
             var fileKeys = new Dictionary<string, List<IPrepareShareRevision>>();
             foreach (var revision in revisions)
             {
-                var accessKey = revision.AccessKeys.FirstOrDefault(x => x.User.Id.AsString == requestingUserId);
+                var accessKey = revision.AccessKeys.FirstOrDefault(x => x.UserId == requestingUserId);
                 if (accessKey == null)
                     continue;
 
-                var fileId = revision.File.Id.AsString;
+                var fileId = revision.File;
 
                 if (!fileKeys.TryGetValue(fileId, out var sharedRevisions))
                     fileKeys.Add(fileId, new List<IPrepareShareRevision>());
 
                 fileKeys[fileId].Add(new PrepareShareRevision(
-                    revision.Id, 
+                    revision.Id,
                     new[] { accessKey }));
             }
-            
+
             var prepareShareFiles = fileKeys
                 .Select(x => (IPrepareShareFile)new PrepareShareFile(x.Key, x.Value.ToArray()))
                 .ToArray();
@@ -466,7 +526,7 @@ namespace LessPaper.GuardService.Models.Database
             // Map user data to final business object
             var userData = await userDataTask;
             var userPublicKeys = userData.ToDictionary(x => x.Email, x => x.PublicKey);
-            
+
             return new PrepareShareData(directoryId, userPublicKeys, prepareShareFiles);
         }
 
@@ -500,8 +560,8 @@ namespace LessPaper.GuardService.Models.Database
                         accessKeys.Add(new AccessKeyDto
                         {
                             SymmetricEncryptedFileKey = accessKey.SymmetricEncryptedFileKey,
-                            Issuer = new MongoDBRef(tables.UserTable, accessKey.IssuerId),
-                            User = new MongoDBRef(tables.UserTable, userId)
+                            IssuerId =  accessKey.IssuerId,
+                            UserId = userId
                         });
                     }
 
