@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using LessPaper.Shared.Enums;
 using LessPaper.Shared.Helper;
+using LessPaper.Shared.Models.Exceptions;
 using Xunit;
 
 namespace LessPaper.GuardService.IntegrationTest
@@ -147,11 +148,13 @@ namespace LessPaper.GuardService.IntegrationTest
                 "Duplicate_Name",
                 IdGenerator.NewId(IdType.Directory)));
 
-            Assert.False(await DirectoryManager.InsertDirectory(
-                user1.UserId,
-                user1.RootDirectoryId,
-                "Duplicate_Name",
-                IdGenerator.NewId(IdType.Directory)));
+            await Assert.ThrowsAsync<DatabaseException>(async () =>
+                await DirectoryManager.InsertDirectory(
+                     user1.UserId,
+                     user1.RootDirectoryId,
+                     "Duplicate_Name",
+                     IdGenerator.NewId(IdType.Directory))
+            );
         }
 
 
@@ -236,7 +239,10 @@ namespace LessPaper.GuardService.IntegrationTest
         {
             var user1 = await UserManager.GenerateUser();
 
-            Assert.Null(await DirectoryManager.Delete(user1.UserId, user1.RootDirectoryId));
+            await Assert.ThrowsAsync<ObjectNotResolvableException>(async () => 
+                await DirectoryManager.Delete(user1.UserId, user1.RootDirectoryId)
+            );
+          
             var metadata = await DirectoryManager.GetDirectoryMetadata(user1.UserId, user1.RootDirectoryId, null);
             Assert.NotNull(metadata);
         }
@@ -255,8 +261,10 @@ namespace LessPaper.GuardService.IntegrationTest
 
             Assert.Equal(new string[0], await DirectoryManager.Delete(user1.UserId, subDirectoryId));
 
-            var directory = await DirectoryManager.GetDirectoryMetadata(user1.UserId, subDirectoryId, null);
-            Assert.Null(directory);
+
+            await Assert.ThrowsAsync<ObjectNotResolvableException>(
+                async () => await DirectoryManager.GetDirectoryMetadata(user1.UserId, subDirectoryId, null));
+
         }
 
         [Fact]

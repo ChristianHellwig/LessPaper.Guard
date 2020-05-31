@@ -12,6 +12,7 @@ using LessPaper.Shared.Helper;
 using LessPaper.Shared.Interfaces.Database.Manager;
 using LessPaper.Shared.Interfaces.General;
 using LessPaper.Shared.Interfaces.GuardApi.Response;
+using LessPaper.Shared.Models.Exceptions;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.Mvc;
@@ -69,8 +70,8 @@ namespace LessPaper.GuardService.Models.Database
                 // deletable in the case of the root directory
                 if (deleteResult == null)
                 {
-                    await session.AbortTransactionAsync();
-                    return null;
+                    throw new ObjectNotResolvableException(
+                        $"Deletion of directory {directoryId} could not be performed by user {requestingUserId}");
                 }
 
                 // Find subdirectories and get a list of all files
@@ -90,7 +91,7 @@ namespace LessPaper.GuardService.Models.Database
 
                 // Delete files
                 var fileIds = subDirectories.SelectMany(x => x.Files).ToArray();
-                
+
                 var deleteFilesTask = filesCollection.DeleteManyAsync(session, x => fileIds.Contains(x.Id));
 
                 // Get all revisions (in order to remove bucket blobs later on)
@@ -108,11 +109,25 @@ namespace LessPaper.GuardService.Models.Database
 
                 return revisionIds.ToArray();
             }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (InvalidParameterException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during file inserting. See inner exception.", e);
+            }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return null;
+                throw new Exception("Unknown error during file inserting. See inner exception.", e);
             }
         }
 
@@ -120,10 +135,11 @@ namespace LessPaper.GuardService.Models.Database
         public async Task<bool> InsertDirectory(string requestingUserId, string parentDirectoryId, string directoryName, string newDirectoryId)
         {
             using var session = await client.StartSessionAsync();
-            session.StartTransaction();
 
             try
             {
+                session.StartTransaction();
+
                 var parentDirectory = await directoryCollection.AsQueryable()
                     .Where(x =>
                         x.Id == parentDirectoryId &&
@@ -140,7 +156,10 @@ namespace LessPaper.GuardService.Models.Database
                     .FirstOrDefaultAsync();
 
                 if (parentDirectory == null)
-                    return false;
+                {
+                    throw new ObjectNotResolvableException(
+                        $"Parent directory {parentDirectoryId} could not be found or accessed by user {requestingUserId} during directory insertion");
+                }
 
                 var newPath = parentDirectory.Path.ToList();
                 newPath.Add(newDirectoryId);
@@ -160,76 +179,116 @@ namespace LessPaper.GuardService.Models.Database
 
                 var insertDirectoryTask = directoryCollection.InsertOneAsync(session, newDirectory);
 
-                var update = Builders<DirectoryDto>.Update
-                    .Push(e => e.DirectoryIds,  newDirectoryId);
-
+                var update = Builders<DirectoryDto>.Update.Push(e => e.DirectoryIds, newDirectoryId);
                 var updateResultTask = directoryCollection.UpdateOneAsync(session, x => x.Id == parentDirectoryId, update);
 
                 await Task.WhenAll(insertDirectoryTask, updateResultTask);
                 if (updateResultTask.Result.ModifiedCount != 1)
                 {
-                    await session.AbortTransactionAsync();
-                    return false;
+                    throw new UnexpectedBehaviourException(
+                        $"Insertion of new directory {newDirectoryId} to {parentDirectoryId} changed {updateResultTask.Result.ModifiedCount} parent directories but must exactly change 1");
                 }
 
                 await session.CommitTransactionAsync();
+                return true;
+            }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (InvalidParameterException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during file inserting. See inner exception.", e);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return false;
+                throw new Exception("Unknown error during file inserting. See inner exception.", e);
             }
-
-            return true;
         }
 
         /// <inheritdoc />
         public async Task<IPermissionResponse[]> GetPermissions(string requestingUserId, string userId, string[] objectIds)
         {
-            var directoryPermissions = await directoryCollection
-                .AsQueryable()
-                .Where(x =>
-                    objectIds.Contains(x.Id) &&
-                    x.Permissions.Any(y =>
-                        (
-                            y.Permission.HasFlag(Permission.ReadPermissions) ||
-                            y.Permission.HasFlag(Permission.Read)
-                        ) &&
-                        y.UserId == requestingUserId
-                    ))
-                .Select(x => new
+            try
+            {
+                var directoryPermissions = await directoryCollection
+                    .AsQueryable()
+                    .Where(x =>
+                        objectIds.Contains(x.Id) &&
+                        x.Permissions.Any(y =>
+                            (
+                                y.Permission.HasFlag(Permission.ReadPermissions) ||
+                                y.Permission.HasFlag(Permission.Read)
+                            ) &&
+                            y.UserId == requestingUserId
+                        ))
+                    .Select(x => new
+                    {
+                        Id = x.Id,
+                        Permissions = x.Permissions
+                    })
+                    .ToListAsync();
+
+                if (directoryPermissions.Count == 0)
                 {
-                    Id = x.Id,
-                    Permissions = x.Permissions
-                })
-                .ToListAsync();
+                    throw new ObjectNotResolvableException(
+                        $"Directories could not be found or accessed by user {requestingUserId} during directory get permissions request");
+                }
+
+                var responseObj = new List<IPermissionResponse>(directoryPermissions.Count);
+                if (requestingUserId == userId)
+                {
+                    // Require at least a read flag
+                    responseObj.AddRange((from directoryPermission in directoryPermissions
+                                          let permissionEntry = directoryPermission.Permissions
+                                              .RestrictPermissions(requestingUserId)
+                                              .FirstOrDefault()
+                                          where permissionEntry != null
+                                          select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)));
+                }
+                else
+                {
+                    // Require ReadPermissions flag
+                    responseObj.AddRange((from directoryPermission in directoryPermissions
+                                          let permissionEntry = directoryPermission.Permissions
+                                              .RestrictPermissions(requestingUserId)
+                                              .FirstOrDefault(x => x.UserId == userId)
+                                          where permissionEntry != null
+                                          select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)));
+                }
 
 
-            var responseObj = new List<IPermissionResponse>(directoryPermissions.Count);
-            if (requestingUserId == userId)
-            {
-                // Require at least a read flag
-                responseObj.AddRange((from directoryPermission in directoryPermissions
-                                      let permissionEntry = directoryPermission.Permissions
-                                          .RestrictPermissions(requestingUserId)
-                                          .FirstOrDefault()
-                                      where permissionEntry != null
-                                      select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
+                return responseObj.ToArray();
             }
-            else
+            catch (ObjectNotResolvableException)
             {
-                // Require ReadPermissions flag
-                responseObj.AddRange((from directoryPermission in directoryPermissions
-                                      let permissionEntry = directoryPermission.Permissions
-                                          .RestrictPermissions(requestingUserId)
-                                          .FirstOrDefault(x => x.UserId == userId)
-                                      where permissionEntry != null
-                                      select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
+                throw;
             }
-
-
-            return responseObj.ToArray();
+            catch (InvalidParameterException)
+            {
+                throw;
+            }
+            catch (MongoException e)
+            {
+                throw new DatabaseException("Database error during get directory permission request. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                throw new Exception("Unknown error during get directory permission request. See inner exception.", e);
+            }
         }
 
         /// <inheritdoc />
@@ -237,7 +296,7 @@ namespace LessPaper.GuardService.Models.Database
         {
             try
             {
-                // [Optimistic execution] Recieve the files and the revisions
+                // [Optimistic execution] Receive the files and the revisions
                 var getRawFileChildsTask = filesCollection
                     .AsQueryable()
                     .Where(x => x.ParentDirectoryId == directoryId)
@@ -262,8 +321,11 @@ namespace LessPaper.GuardService.Models.Database
 
                 // Return null if permissions not granted or directory does not exists
                 if (directory == null)
-                    return null;
-                
+                {
+                    throw new ObjectNotResolvableException(
+                        $"Directory {directoryId} could not be found or accessed by user {requestingUserId} during directory get directory metadata request");
+                }
+
 
                 // Get Child directories
                 var childDirectoryIds = directory.DirectoryIds.ToArray();
@@ -278,7 +340,7 @@ namespace LessPaper.GuardService.Models.Database
                         Permissions = x.Permissions,
                         PathIds = x.PathIds
                     }).ToListAsync();
-                
+
                 await Task.WhenAll(directoryDtoChildsTask, getRawFileChildsTask);
 
                 // Filter directory permissions
@@ -293,46 +355,102 @@ namespace LessPaper.GuardService.Models.Database
                 var childDirectories = directoryDtoChildsTask.Result
                     .Select(x => (IMinimalDirectoryMetadata)new MinimalDirectoryMetadata(x, x.NumberOfChilds))
                     .ToArray();
-                
+
                 var childFiles = getRawFileChildsTask.Result
                     .Select(x => (IFileMetadata)new File(
                         x.File.RestrictPermissions(requestingUserId),
                         x.Revisons.ToArray())
                     )
                     .ToArray();
-                
+
                 return new Directory(directory, childFiles, childDirectories);
+            }
+            catch (ObjectNotResolvableException)
+            {
+                throw;
+            }
+            catch (InvalidParameterException)
+            {
+                throw;
+            }
+            catch (MongoException e)
+            {
+                throw new DatabaseException("Database error during get directory metadata request. See inner exception.", e);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
-                return null;
+                throw new Exception("Unknown error during get directory metadata request. See inner exception.", e);
             }
         }
 
         /// <inheritdoc />
-        public async Task<bool> Rename(string requestingUserId, string objectId, string newName)
+        public async Task<bool> Rename(string requestingUserId, string directoryId, string newName)
         {
-            var update = Builders<DirectoryDto>.Update.Set(x => x.ObjectName, newName);
+            using var session = await client.StartSessionAsync();
 
-            var updateResultTask = await directoryCollection.UpdateOneAsync(x =>
-                x.Id == objectId &&
-                x.Permissions.Any(y =>
-                    y.Permission.HasFlag(Permission.ReadWrite) &&
-                  y.UserId ==  requestingUserId
-            ), update);
+            try
+            {
+                session.StartTransaction();
 
-            return updateResultTask.ModifiedCount == 1;
+                var update = Builders<DirectoryDto>.Update.Set(x => x.ObjectName, newName);
+                var updateResultTask = await directoryCollection.UpdateOneAsync(session, x =>
+                    x.Id == directoryId &&
+                    x.Permissions.Any(y =>
+                        y.Permission.HasFlag(Permission.ReadWrite) &&
+                        y.UserId == requestingUserId
+                    ), update);
+
+                if (updateResultTask.ModifiedCount == 0)
+                {
+                    throw new ObjectNotResolvableException(
+                        $"Directory {directoryId} could not be found or accessed by user {requestingUserId} during directory rename");
+                }
+
+                if (updateResultTask.ModifiedCount != 1)
+                {
+                    throw new UnexpectedBehaviourException(
+                        $"Rename directory {directoryId} by user {requestingUserId} modified to many elements");
+                }
+
+                await session.CommitTransactionAsync();
+                return true;
+            }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (InvalidParameterException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during directory rename. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                await session.AbortTransactionAsync();
+                throw new Exception("Unknown error during directory rename. See inner exception.", e);
+            }
         }
 
         /// <inheritdoc />
         public async Task<bool> Move(string requestingUserId, string objectId, string targetDirectoryId)
         {
             using var session = await client.StartSessionAsync();
-            session.StartTransaction();
 
             try
             {
+                session.StartTransaction();
+
                 // Update filter to remove the directory id from the old parent folder
                 var removeDirectoryRefUpdate = Builders<DirectoryDto>.Update.Pull(x => x.DirectoryIds, objectId);
 
@@ -351,7 +469,7 @@ namespace LessPaper.GuardService.Models.Database
                     // Ensure that we have the parent by checking if parent contains the subfolder that we want to move 
                     x.DirectoryIds.Contains(objectId),
                     removeDirectoryRefUpdate);
-                
+
                 // Update filter to add the directory id to the new parent folder
                 var addDirectoryRefUpdate = Builders<DirectoryDto>.Update.Push(
                     e => e.DirectoryIds,
@@ -360,9 +478,8 @@ namespace LessPaper.GuardService.Models.Database
                 var newParentDirectoryTask = directoryCollection.FindOneAndUpdateAsync(
                     session,
                     x =>
-                        // Ensure we insert into the right folder
-                        x.Id == targetDirectoryId &&
-
+                         // Ensure we insert into the right folder
+                         x.Id == targetDirectoryId &&
                          // Ensure user has the rights to move the directory into the folder
                          x.Permissions.Any(y =>
                              y.Permission.HasFlag(Permission.ReadWrite) &&
@@ -374,10 +491,16 @@ namespace LessPaper.GuardService.Models.Database
                 await Task.WhenAll(oldParentDirectoryTask, newParentDirectoryTask);
 
                 // Ensure directories could be resolved
-                if (oldParentDirectoryTask.Result == null || newParentDirectoryTask.Result == null)
+                if (oldParentDirectoryTask.Result == null)
                 {
-                    await session.AbortTransactionAsync();
-                    return false;
+                    throw new ObjectNotResolvableException(
+                        $"Parent directory of directory {objectId} could not be found or accessed by user {requestingUserId} during directory move");
+                }
+
+                if (newParentDirectoryTask.Result == null)
+                {
+                    throw new ObjectNotResolvableException(
+                        $"New parent directory {targetDirectoryId} could not be found or accessed by user {requestingUserId} during directory move");
                 }
 
                 // Going to update the new directory path
@@ -440,99 +563,131 @@ namespace LessPaper.GuardService.Models.Database
                 if (removedChangedDirectoryDtosTask.Result.ModifiedCount != addChangedDirectoryDtosTask.Result.ModifiedCount ||
                     removeChangedFileDtosTask.Result.ModifiedCount != addChangedFilesDtosTask.Result.ModifiedCount)
                 {
-                    await session.AbortTransactionAsync();
-                    return false;
+                    throw new UnexpectedBehaviourException(
+                        $"Move directory {objectId} to directory {targetDirectoryId} by user {requestingUserId} modified to many elements");
                 }
 
                 await session.CommitTransactionAsync();
                 return true;
             }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during directory move. See inner exception.", e);
+            }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return false;
+                throw new Exception("Unknown error during directory move. See inner exception.", e);
             }
         }
 
         /// <inheritdoc />
         public async Task<IPrepareShareData> PrepareShare(string requestingUserId, string directoryId, string[] userEmails)
         {
-            var cancellationToken = new CancellationTokenSource();
-
-            // Start file ids query
-            var fileIdsTask = directoryCollection
-                .AsQueryable()
-                .Where(x => x.PathIds.Contains(directoryId))
-                .SelectMany(x => x.FileIds)
-                .ToListAsync(cancellationToken.Token);
-
-            // Start user information query
-            var userDataTask = userCollection.AsQueryable().Where(x => userEmails.Contains(x.Email)).Select(x => new
+            try
             {
-                Email = x.Email,
-                PublicKey = x.PublicKey
-            }).ToListAsync(cancellationToken.Token);
+                var cancellationToken = new CancellationTokenSource();
 
-            // Check if requesting user has permissions
-            var hasPermissionsOnRootFolder = await directoryCollection.AsQueryable().AnyAsync(
-                x => x.Id == directoryId &&
-                     x.Permissions.Any(y =>
-                         y.Permission.HasFlag(Permission.ReadWrite) &&
-                         y.UserId ==  requestingUserId
-                     ));
+                // Start file ids query
+                var fileIdsTask = directoryCollection
+                    .AsQueryable()
+                    .Where(x => x.PathIds.Contains(directoryId))
+                    .SelectMany(x => x.FileIds)
+                    .ToListAsync(cancellationToken.Token);
 
-            if (!hasPermissionsOnRootFolder)
-            {
-                cancellationToken.Cancel();
-                return null;
-            }
-
-            // Get file revisions
-            var fileIds = await fileIdsTask;
-            var revisions = await fileRevisionCollection
-                .AsQueryable()
-                .Where(x => fileIds.Contains(x.File))
-                .Select(x => new
+                // Start user information query
+                var userDataTask = userCollection.AsQueryable().Where(x => userEmails.Contains(x.Email)).Select(x => new
                 {
-                    Id = x.Id,
-                    File = x.File,
-                    AccessKeys = x.AccessKeys
-                })
-                .ToListAsync();
+                    Email = x.Email,
+                    PublicKey = x.PublicKey
+                }).ToListAsync(cancellationToken.Token);
 
-            // Map file revisions to final business object
-            var fileKeys = new Dictionary<string, List<IPrepareShareRevision>>();
-            foreach (var revision in revisions)
-            {
-                var accessKey = revision.AccessKeys.FirstOrDefault(x => x.UserId == requestingUserId);
-                if (accessKey == null)
-                    continue;
+                // Check if requesting user has permissions
+                var hasPermissionsOnRootFolder = await directoryCollection.AsQueryable().AnyAsync(
+                    x => x.Id == directoryId &&
+                         x.Permissions.Any(y =>
+                             y.Permission.HasFlag(Permission.ReadWrite) &&
+                             y.UserId == requestingUserId
+                         ));
 
-                var fileId = revision.File;
+                if (!hasPermissionsOnRootFolder)
+                {
+                    cancellationToken.Cancel();
+                    throw new ObjectNotResolvableException(
+                        $"Directory {directoryId} could not be found or accessed by user {requestingUserId} during share preparation");
+                }
 
-                if (!fileKeys.TryGetValue(fileId, out var sharedRevisions))
-                    fileKeys.Add(fileId, new List<IPrepareShareRevision>());
+                // Get file revisions
+                var fileIds = await fileIdsTask;
+                var revisions = await fileRevisionCollection
+                    .AsQueryable()
+                    .Where(x => fileIds.Contains(x.File))
+                    .Select(x => new
+                    {
+                        Id = x.Id,
+                        File = x.File,
+                        AccessKeys = x.AccessKeys
+                    })
+                    .ToListAsync();
 
-                fileKeys[fileId].Add(new PrepareShareRevision(
-                    revision.Id,
-                    new[] { accessKey }));
+                // Map file revisions to final business object
+                var fileKeys = new Dictionary<string, List<IPrepareShareRevision>>();
+                foreach (var revision in revisions)
+                {
+                    var accessKey = revision.AccessKeys.FirstOrDefault(x => x.UserId == requestingUserId);
+                    if (accessKey == null)
+                        continue;
+
+                    var fileId = revision.File;
+
+                    if (!fileKeys.TryGetValue(fileId, out var sharedRevisions))
+                        fileKeys.Add(fileId, new List<IPrepareShareRevision>());
+
+                    fileKeys[fileId].Add(new PrepareShareRevision(
+                        revision.Id,
+                        new[] { accessKey }));
+                }
+
+                var prepareShareFiles = fileKeys
+                    .Select(x => (IPrepareShareFile)new PrepareShareFile(x.Key, x.Value.ToArray()))
+                    .ToArray();
+
+                // Map user data to final business object
+                var userData = await userDataTask;
+                var userPublicKeys = userData.ToDictionary(x => x.Email, x => x.PublicKey);
+
+                return new PrepareShareData(directoryId, userPublicKeys, prepareShareFiles);
             }
-
-            var prepareShareFiles = fileKeys
-                .Select(x => (IPrepareShareFile)new PrepareShareFile(x.Key, x.Value.ToArray()))
-                .ToArray();
-
-            // Map user data to final business object
-            var userData = await userDataTask;
-            var userPublicKeys = userData.ToDictionary(x => x.Email, x => x.PublicKey);
-
-            return new PrepareShareData(directoryId, userPublicKeys, prepareShareFiles);
+            catch (ObjectNotResolvableException)
+            {
+                throw;
+            }
+            catch (MongoException e)
+            {
+                throw new DatabaseException("Database error during directory prepare share. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                throw new Exception("Unknown error during directory prepare share. See inner exception.", e);
+            }
         }
 
         /// <inheritdoc />
         public async Task<bool> Share(string requestingUserId, IShareData shareData)
         {
+            throw new NotImplementedException();
+
             var emailAddresses = shareData.EncryptedKeys.Keys;
             var userIds = await userCollection
                 .AsQueryable()
@@ -560,7 +715,7 @@ namespace LessPaper.GuardService.Models.Database
                         accessKeys.Add(new AccessKeyDto
                         {
                             SymmetricEncryptedFileKey = accessKey.SymmetricEncryptedFileKey,
-                            IssuerId =  accessKey.IssuerId,
+                            IssuerId = accessKey.IssuerId,
                             UserId = userId
                         });
                     }

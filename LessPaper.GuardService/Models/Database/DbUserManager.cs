@@ -9,6 +9,7 @@ using LessPaper.Shared.Enums;
 using LessPaper.Shared.Helper;
 using LessPaper.Shared.Interfaces.Database.Manager;
 using LessPaper.Shared.Interfaces.General;
+using LessPaper.Shared.Models.Exceptions;
 using MongoDB.Driver;
 using MongoDB.Driver.Linq;
 
@@ -48,8 +49,7 @@ namespace LessPaper.GuardService.Models.Database
             {
                 // Begin transaction
                 session.StartTransaction();
-
-
+                
                 try
                 {
                     var newRootDirectory = new DirectoryDto
@@ -71,7 +71,6 @@ namespace LessPaper.GuardService.Models.Database
                         },
                         
                     };
-
                     var insertRootDirectoryTask = directoryCollection.InsertOneAsync(session, newRootDirectory);
 
                     var newUser = new UserDto
@@ -84,17 +83,20 @@ namespace LessPaper.GuardService.Models.Database
                         PublicKey = publicKey,
                         EncryptedPrivateKey = encryptedPrivateKey
                     };
-
                     var insertUserTask = userCollection.InsertOneAsync(session, newUser);
 
                     await Task.WhenAll(insertRootDirectoryTask, insertUserTask);
                     await session.CommitTransactionAsync();
                 }
+                catch (MongoException e)
+                {
+                    await session.AbortTransactionAsync();
+                    throw new DatabaseException("Database error during user creating. See inner exception.", e);
+                }
                 catch (Exception e)
                 {
-                    Console.WriteLine("Error writing to MongoDB: " + e.Message);
                     await session.AbortTransactionAsync();
-                    return false;
+                    throw new Exception("Unknown error during file inserting. See inner exception.", e);
                 }
             }
 
@@ -108,12 +110,12 @@ namespace LessPaper.GuardService.Models.Database
             if (requestingUserId != userId)
                 return null;
             
-
             using var session = await client.StartSessionAsync();
-            session.StartTransaction();
 
             try
             {
+                session.StartTransaction();
+
                 var revisionIds = await fileRevisionCollection
                     .AsQueryable()
                     .Where(x => x.OwnerId == userId)
@@ -136,11 +138,15 @@ namespace LessPaper.GuardService.Models.Database
 
                 return revisionIds.ToArray();
             }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during user delete. See inner exception.", e);
+            }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return null;
+                throw new Exception("Unknown error during user delete. See inner exception.", e);
             }
         }
 
@@ -148,10 +154,20 @@ namespace LessPaper.GuardService.Models.Database
         public async Task<IMinimalUserInformation> GetBasicUserInformation(string requestingUserId, string userId)
         {
             if (requestingUserId != userId)
-                return null;
+            {
+                throw new ObjectNotResolvableException(
+                    $"User {userId} could not be accessed by user {requestingUserId} during user information request");
+            }
 
             var userInformationDto = await userCollection.Find(user => user.Id == userId).FirstOrDefaultAsync();
-            return userInformationDto == null ? null : new MinimalUserInformation(userInformationDto);
+
+            if (userInformationDto == null)
+            {
+                throw new ObjectNotResolvableException(
+                    $"User {userId} could not be found by user {requestingUserId} during user information request");
+            }
+            
+            return new MinimalUserInformation(userInformationDto);
         }
     }
 }

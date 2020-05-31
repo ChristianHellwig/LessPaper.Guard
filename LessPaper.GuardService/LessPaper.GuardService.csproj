@@ -9,10 +9,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Models\Exceptions\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Reference Include="LessPaper.Shared">
       <HintPath>..\..\LessPaper.Shared\LessPaper.Shared\bin\Debug\netstandard2.0\LessPaper.Shared.dll</HintPath>
     </Reference>

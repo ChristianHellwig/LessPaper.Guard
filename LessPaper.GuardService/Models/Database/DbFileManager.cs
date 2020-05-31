@@ -13,6 +13,7 @@ using LessPaper.Shared.Helper;
 using LessPaper.Shared.Interfaces.Database.Manager;
 using LessPaper.Shared.Interfaces.General;
 using LessPaper.Shared.Interfaces.GuardApi.Response;
+using LessPaper.Shared.Models.Exceptions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
@@ -58,145 +59,231 @@ namespace LessPaper.GuardService.Models.Database
         public async Task<string[]> Delete(string requestingUserId, string fileId)
         {
             using var session = await client.StartSessionAsync();
-            session.StartTransaction();
-
-            
 
             try
             {
+                session.StartTransaction();
 
-                var directoryUpdate = Builders<DirectoryDto>.Update.Pull(x => x.FileIds,  fileId);
+                var directoryUpdate = Builders<DirectoryDto>.Update.Pull(x => x.FileIds, fileId);
+                var updatedDirectoryTask = await directoryCollection.UpdateOneAsync(session,
+                    x =>
+                        x.FileIds.Contains(fileId) &&
+                        (x.OwnerId == requestingUserId ||
+                         x.Permissions.Any(y =>
+                            y.Permission.HasFlag(Permission.ReadWrite) &&
+                            y.UserId == requestingUserId
+                        )),
+                    directoryUpdate);
 
-                var updatedDirectoryTask = directoryCollection.UpdateOneAsync(session,
-                    x => x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.ReadWrite) &&
-                        y.UserId == requestingUserId
-                ), directoryUpdate);
 
-                var revisionsTask = fileRevisionCollection.DeleteManyAsync(
-                    session, x => x.File ==  fileId);
+                if (updatedDirectoryTask.ModifiedCount == 0)
+                {
+                    throw new ObjectNotResolvableException(
+                        $"Parent directory of file {fileId} could not be found or accessed by user {requestingUserId} during file delete");
+                }
 
-                var deadRevisions = await filesCollection.FindOneAndDeleteAsync(
+                if (updatedDirectoryTask.ModifiedCount > 1)
+                {
+                    throw new UnexpectedBehaviourException(
+                        $"Delete of file {fileId} by user {requestingUserId} changed {updatedDirectoryTask.ModifiedCount} parent directories but must exactly change 1");
+                }
+
+                var revisionsTask = fileRevisionCollection.DeleteManyAsync(session, x => x.File == fileId);
+                var deleteFileTask = filesCollection.FindOneAndDeleteAsync(
                     session,
                     x => x.Id == fileId, new FindOneAndDeleteOptions<FileDto, TempRevisionView>
                     {
                         Projection = Builders<FileDto>.Projection.Include(x => x.RevisionIds)
                     });
-                
-                await Task.WhenAll(updatedDirectoryTask, revisionsTask);
+
+                await Task.WhenAll(deleteFileTask, revisionsTask);
                 await session.CommitTransactionAsync();
 
-                return deadRevisions.RevisionIds.ToArray();
+                return deleteFileTask.Result.RevisionIds.ToArray();
+            }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during file delete. See inner exception.", e);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return null;
+                throw new Exception("Unknown error during file delete. See inner exception.", e);
             }
         }
 
         /// <inheritdoc />
         public async Task<IPermissionResponse[]> GetPermissions(string requestingUserId, string userId, string[] objectIds)
         {
-            var filePermissions = await filesCollection.AsQueryable()
-                .Where(x =>
-                    objectIds.Contains(x.Id) &&
-                    x.Permissions.Any(y =>
-                        (y.Permission.HasFlag(Permission.Read) ||
-                         y.Permission.HasFlag(Permission.ReadPermissions)) &&
-                        y.UserId == requestingUserId
-                    ))
-                .Select(x => new
-                {
-                    Id = x.Id,
-                    Permissions = x.Permissions.Select(y => new BasicPermissionDto
+            try
+            {
+                var files = await filesCollection.AsQueryable()
+                    .Where(x =>
+                        objectIds.Contains(x.Id) &&
+                        (x.OwnerId == requestingUserId ||
+                         x.Permissions.Any(y =>
+                             (y.Permission.HasFlag(Permission.Read) ||
+                              y.Permission.HasFlag(Permission.ReadPermissions)) &&
+                             y.UserId == requestingUserId
+                         )))
+                    .Select(x => new
                     {
-                        Permission = y.Permission,
-                        UserId = y.UserId,
-                    }).ToArray()
-                })
-                .ToListAsync();
+                        Id = x.Id,
+                        Permissions = x.Permissions
+                    })
+                    .ToListAsync();
 
-            // Restrict response to relevant and viewable permissions
-            var responseObj = new List<IPermissionResponse>(filePermissions.Count);
-            if (requestingUserId == userId)
-            {
-                // Require at least a read flag
-                responseObj.AddRange((from directoryPermission in filePermissions
-                                      let permissionEntry = directoryPermission.Permissions
-                                          .RestrictPermissions(requestingUserId)
-                                          .FirstOrDefault()
-                                      where permissionEntry != null
-                                      select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission)).Cast<IPermissionResponse>());
-            }
-            else
-            {
-                responseObj.AddRange(from directoryPermission in filePermissions
-                                     let permissionEntry = directoryPermission.Permissions
-                                         .RestrictPermissions(requestingUserId)
-                                         .FirstOrDefault(x => x.UserId == userId)
-                                     where permissionEntry != null
-                                     select new PermissionResponse(directoryPermission.Id, permissionEntry.Permission));
-            }
+                // Restrict response to relevant and viewable permissions
+                var responseObj = new List<IPermissionResponse>(files.Count);
+                if (requestingUserId == userId)
+                {
+                    // Require at least a read flag
+                    responseObj.AddRange((files
+                        .Select(directoryPermission => new
+                        {
+                            directoryPermission,
+                            permissionEntry = directoryPermission.Permissions
+                                .RestrictPermissions(requestingUserId)
+                                .FirstOrDefault()
+                        })
+                        .Where(x => x.permissionEntry != null)
+                        .Select(x => new PermissionResponse(x.directoryPermission.Id, x.permissionEntry.Permission))));
+                }
+                else
+                {
+                    responseObj.AddRange(files
+                        .Select(directoryPermission => new
+                        {
+                            directoryPermission,
+                            permissionEntry = directoryPermission.Permissions
+                                .RestrictPermissions(requestingUserId)
+                                .FirstOrDefault(x => x.UserId == userId)
+                        })
+                        .Where(x => x.permissionEntry != null)
+                        .Select(x => new PermissionResponse(x.directoryPermission.Id, x.permissionEntry.Permission)));
+                }
 
-            return responseObj.ToArray();
+                return responseObj.ToArray();
+            }
+            catch (MongoException e)
+            {
+                throw new DatabaseException("Database error during directory move. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                throw new Exception("Unknown error during directory move. See inner exception.", e);
+            }
         }
 
         /// <inheritdoc />
-        public async Task<bool> Rename(string requestingUserId, string objectId, string newName)
-        {
-            var update = Builders<FileDto>.Update.Set(x => x.ObjectName, newName);
-
-            var updateResult = await filesCollection.UpdateOneAsync(x => 
-                x.Id == objectId &&
-                x.Permissions.Any(y =>
-                    y.Permission.HasFlag(Permission.ReadWrite) &&
-                    y.UserId == requestingUserId
-                ), update);
-
-            return updateResult.ModifiedCount == 1;
-        }
-
-        /// <inheritdoc />
-        public async Task<bool> Move(string requestingUserId, string objectId, string targetDirectoryId)
+        public async Task<bool> Rename(string requestingUserId, string fileId, string newName)
         {
             using var session = await client.StartSessionAsync();
-            session.StartTransaction();
 
+            try
+            {
+                session.StartTransaction();
+                
+                var update = Builders<FileDto>.Update.Set(x => x.ObjectName, newName);
+                var updateResult = await filesCollection.UpdateOneAsync(
+                    session,
+                x =>
+                        x.Id == fileId &&
+                        (x.OwnerId == requestingUserId ||
+                         x.Permissions.Any(y =>
+                             y.Permission.HasFlag(Permission.ReadWrite) &&
+                             y.UserId == requestingUserId
+                         )), update);
+                
+                if (updateResult.ModifiedCount == 0)
+                {
+                    throw new ObjectNotResolvableException(
+                        $"File {fileId} could not be found or accessed by user {requestingUserId} during file rename");
+                }
+
+                if (updateResult.ModifiedCount > 1)
+                {
+                    throw new UnexpectedBehaviourException(
+                        $"Rename of file {fileId} by user {requestingUserId} changed {updateResult.ModifiedCount} files but must exactly change 1");
+                }
+
+                await session.CommitTransactionAsync();
+                return true;
+            }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during file rename. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                await session.AbortTransactionAsync();
+                throw new Exception("Unknown error during file rename. See inner exception.", e);
+            }
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> Move(string requestingUserId, string fileId, string targetDirectoryId)
+        {
+            using var session = await client.StartSessionAsync();
             var cancellationTokenSource = new CancellationTokenSource();
 
             try
             {
-                var popUpdate = Builders<DirectoryDto>.Update.Pull(x => x.FileIds, objectId);
+                session.StartTransaction();
+
+                var popUpdate = Builders<DirectoryDto>.Update.Pull(x => x.FileIds, fileId);
 
                 // Remove file from directory
                 var removeFileFromOldDirectoryTask = directoryCollection.UpdateOneAsync(session, x =>
                     x.Id != targetDirectoryId &&
-                    x.FileIds.Contains(objectId) &&
-                    x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.ReadWrite) &&
-                        y.UserId ==  requestingUserId
-                    ), popUpdate, cancellationToken: cancellationTokenSource.Token);
+                    x.FileIds.Contains(fileId) &&
+                    (x.OwnerId == requestingUserId ||
+                     x.Permissions.Any(y =>
+                         y.Permission.HasFlag(Permission.ReadWrite) &&
+                         y.UserId == requestingUserId
+                     )), popUpdate, cancellationToken: cancellationTokenSource.Token);
 
                 // Add file to directory
                 var addUpdate =
-                    Builders<DirectoryDto>.Update.Push(x => x.FileIds, objectId);
+                    Builders<DirectoryDto>.Update.Push(x => x.FileIds, fileId);
 
                 var addFileToNewDirectory = await directoryCollection.FindOneAndUpdateAsync(session, x =>
                     x.Id == targetDirectoryId &&
-                    x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.ReadWrite) &&
-                        y.UserId ==  requestingUserId
-                    ), addUpdate, cancellationToken: cancellationTokenSource.Token);
+                    (x.OwnerId == requestingUserId ||
+                     x.Permissions.Any(y =>
+                         y.Permission.HasFlag(Permission.ReadWrite) &&
+                         y.UserId == requestingUserId
+                     )), addUpdate, cancellationToken: cancellationTokenSource.Token);
 
                 // Cancel if the new directory could not be resolved
                 if (addFileToNewDirectory == null)
                 {
                     cancellationTokenSource.Cancel();
                     //await removeFileFromOldDirectoryTask;
-                    await session.AbortTransactionAsync();
-                    return false;
+                    throw new ObjectNotResolvableException(
+                        $"File {fileId} could not be found or accessed by user {requestingUserId} during file move");
                 }
 
 
@@ -205,15 +292,15 @@ namespace LessPaper.GuardService.Models.Database
 
                 // Update file path
                 var newPath = addFileToNewDirectory.PathIds.ToList();
-                newPath.Add(objectId);
+                newPath.Add(fileId);
                 var filePathUpdate = Builders<FileDto>.Update.Set(x => x.PathIds, newPath.ToArray());
 
                 // Update permissions to directory permissions
                 var filePermissionsUpdate =
                     Builders<FileDto>.Update.Set(x => x.Permissions, addFileToNewDirectory.Permissions);
-                
+
                 var fileUpdate = Builders<FileDto>.Update.Combine(fileParentDirectoryUpdate, filePermissionsUpdate, filePathUpdate);
-                var updateFile = await filesCollection.FindOneAndUpdateAsync(session, x => x.Id == objectId, fileUpdate);
+                var updateFile = await filesCollection.FindOneAndUpdateAsync(session, x => x.Id == fileId, fileUpdate);
 
                 //TODO RevisionIds need the key if a file is moved in a directory with new people
 
@@ -225,18 +312,32 @@ namespace LessPaper.GuardService.Models.Database
                 if (removeFileFromOldDirectoryTask.Result.ModifiedCount != 1 ||
                     updateFile == null)
                 {
-                    await session.AbortTransactionAsync();
-                    return false;
+                    throw new UnexpectedBehaviourException(
+                        $"Move of file {fileId} by user {requestingUserId} changed {removeFileFromOldDirectoryTask.Result.ModifiedCount} directories but must exactly change 1");
                 }
 
                 await session.CommitTransactionAsync();
                 return true;
             }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during file rename. See inner exception.", e);
+            }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return false;
+                throw new Exception("Unknown error during file rename. See inner exception.", e);
             }
         }
 
@@ -274,10 +375,11 @@ namespace LessPaper.GuardService.Models.Database
                 var directory = await directoryCollection.AsQueryable()
                     .Where(x =>
                         x.Id == directoryId &&
-                        x.Permissions.Any(y =>
-                            y.Permission.HasFlag(Permission.ReadWrite) &&
-                            y.UserId == requestingUserId
-                        ))
+                        (x.OwnerId == requestingUserId ||
+                         x.Permissions.Any(y =>
+                             y.Permission.HasFlag(Permission.ReadWrite) &&
+                             y.UserId == requestingUserId
+                         )))
                     .Select(x => new
                     {
                         Owner = x.OwnerId,
@@ -288,7 +390,11 @@ namespace LessPaper.GuardService.Models.Database
 
                 // Return if the user has no permissions or the directory does not exists
                 if (directory == null)
-                    return 0;
+                {
+                    throw new ObjectNotResolvableException(
+                        $"Directory {directoryId} could not be found or accessed by user {requestingUserId} during file insertion");
+
+                }
 
                 var newPath = directory.Path.ToList();
                 newPath.Add(fileId);
@@ -305,18 +411,19 @@ namespace LessPaper.GuardService.Models.Database
                     PathIds = newPath.ToArray(),
                     RevisionIds = new[]
                     {
-                       blobId
+                        blobId
                     },
                     Permissions = directory.Permissions,
                     Tags = new ITag[0],
                 };
 
                 var insertFileTask = filesCollection.InsertOneAsync(session, file);
-             
+
 
                 // Update directory
                 var updateFiles = Builders<DirectoryDto>.Update.Push(e => e.FileIds, fileId);
-                var updateDirectoryTask = directoryCollection.UpdateOneAsync(session, x => x.Id == directoryId, updateFiles);
+                var updateDirectoryTask =
+                    directoryCollection.UpdateOneAsync(session, x => x.Id == directoryId, updateFiles);
 
                 // Get user information
                 var ownerId = directory.Owner;
@@ -324,7 +431,10 @@ namespace LessPaper.GuardService.Models.Database
 
                 // Ensure all keys are delivered
                 if (userIds.Count != encryptedKeys.Count || !encryptedKeys.Keys.All(x => userIds.Contains(x)))
-                    throw new Exception("Invalid number of keys");
+                {
+                    throw new InvalidParameterException(
+                        "Number of given keys does not match the number of required keys during file insertion");
+                }
 
                 var userInfo = await userCollection
                     .AsQueryable()
@@ -347,8 +457,8 @@ namespace LessPaper.GuardService.Models.Database
                     accessKeys.Add(new AccessKeyDto
                     {
                         SymmetricEncryptedFileKey = encryptedKey,
-                        IssuerId =  requestingUserId,
-                        UserId =  userId
+                        IssuerId = requestingUserId,
+                        UserId = userId
                     });
                 }
 
@@ -371,49 +481,80 @@ namespace LessPaper.GuardService.Models.Database
                 await session.CommitTransactionAsync();
                 return newQuickNumber;
             }
+            catch (ObjectNotResolvableException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (InvalidParameterException)
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+            catch (MongoException e)
+            {
+                await session.AbortTransactionAsync();
+                throw new DatabaseException("Database error during file inserting. See inner exception.", e);
+            }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing to MongoDB: " + e.Message);
                 await session.AbortTransactionAsync();
-                return 0;
+                throw new Exception("Unknown error during file inserting. See inner exception.", e);
             }
         }
 
         /// <inheritdoc />
         public async Task<IFileMetadata> GetFileMetadata(string requestingUserId, string fileId, string revisionId)
         {
-            var fileDto = await filesCollection
-                .AsQueryable()
-                .Where(x =>
-                    x.Id == fileId &&
-                    x.Permissions.Any(y =>
-                        y.Permission.HasFlag(Permission.Read) &&
-                        y.UserId ==  requestingUserId
-                ))
-                .FirstOrDefaultAsync();
-
-            if (fileDto == null)
-                return null;
-
-            fileDto = fileDto.RestrictPermissions(requestingUserId);
-
-
-            if (revisionId == null)
+            try
             {
-                // Get all revisions
-                var fileRevisions = await fileRevisionCollection.Find(x => x.File == fileId).ToListAsync();
-                fileRevisions = fileRevisions.RestrictAccessKeys(requestingUserId);
-                return new File(fileDto, fileRevisions.ToArray());
+                var fileDto = await filesCollection
+                    .AsQueryable()
+                    .Where(x =>
+                        x.Id == fileId &&
+                        x.Permissions.Any(y =>
+                            y.Permission.HasFlag(Permission.Read) &&
+                            y.UserId == requestingUserId
+                    ))
+                    .FirstOrDefaultAsync();
+
+                if (fileDto == null)
+                {
+                    throw new ObjectNotResolvableException(
+                        $"File {fileId} could not be found or accessed by user {requestingUserId} during file metadata request");
+                }
+
+                fileDto = fileDto.RestrictPermissions(requestingUserId);
+
+                if (revisionId == null)
+                {
+                    // Get all revisions
+                    var fileRevisions = await fileRevisionCollection.Find(x => x.File == fileId).ToListAsync();
+                    fileRevisions = fileRevisions.RestrictAccessKeys(requestingUserId);
+                    return new File(fileDto, fileRevisions.ToArray());
+                }
+
+                // Get single revision
+                var fileRevision = await fileRevisionCollection.Find(
+                        x => x.File == fileId &&
+                             x.Id == revisionId
+                         ).FirstOrDefaultAsync();
+
+                fileRevision = fileRevision.RestrictAccessKeys(requestingUserId);
+                return new File(fileDto, new[] { fileRevision });
             }
-
-            // Get single revision
-            var fileRevision = await fileRevisionCollection.Find(
-                    x => x.File == fileId && 
-                         x.Id == revisionId
-                     ).FirstOrDefaultAsync();
-
-            fileRevision = fileRevision.RestrictAccessKeys(requestingUserId);
-            return new File(fileDto, new FileRevisionDto[] { fileRevision });
+            catch (ObjectNotResolvableException)
+            {
+                throw;
+            }
+            catch (MongoException e)
+            {
+                throw new DatabaseException("Database error during file inserting. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                throw new Exception("Unknown error during file inserting. See inner exception.", e);
+            }
         }
     }
 }
