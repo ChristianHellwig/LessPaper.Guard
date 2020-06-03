@@ -12,13 +12,29 @@ namespace LessPaper.GuardService.Models.Api
         public string Email { get; set; }
 
         [Required]
-        [JsonPropertyName("password")]
-        [ModelBinder(Name = "password")]
+        [JsonPropertyName("hashed_password")]
+        [ModelBinder(Name = "hashed_password")]
         public string HashedPassword { get; set; }
 
         [Required]
         [JsonPropertyName("salt")]
         [ModelBinder(Name = "salt")]
         public string Salt { get; set; }
+
+        [Required]
+        [JsonPropertyName("user_id")]
+        [ModelBinder(Name = "user_id")]
+        public string UserId { get; set; }
+
+        [Required]
+        [JsonPropertyName("public_key")]
+        [ModelBinder(Name = "public_key")]
+        public string PublicKey { get; set; }
+
+
+        [Required]
+        [JsonPropertyName("encrypted_private_key")]
+        [ModelBinder(Name = "encrypted_private_key")]
+        public string EncryptedPrivateKey { get; set; }
     }
 }

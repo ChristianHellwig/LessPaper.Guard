@@ -1,30 +1,91 @@
 ﻿using System;
 using System.Threading.Tasks;
+using LessPaper.GuardService.Models.Api;
 using LessPaper.Shared.Enums;
+using LessPaper.Shared.Helper;
+using LessPaper.Shared.Interfaces.Database.Manager;
 using LessPaper.Shared.Interfaces.General;
 using LessPaper.Shared.Interfaces.GuardApi;
 using LessPaper.Shared.Interfaces.GuardApi.Response;
 using LessPaper.Shared.Interfaces.WriteApi.WriteObjectApi;
+using LessPaper.Shared.Models.Exceptions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using MongoDB.Driver;
 
 namespace LessPaper.GuardService.Controllers
 {
     [ApiController]
     [Route("[controller]")]
-    public class GuardController : ControllerBase, IGuardApi
+    public class GuardController : ControllerBase
     {
-        private readonly ILogger<GuardController> _logger;
+        private readonly ILogger<GuardController> logger;
+        private readonly IDbUserManager userManager;
+        private readonly IDbDirectoryManager directoryManager;
+        private readonly IDbFileManager fileManager;
 
-        public GuardController(ILogger<GuardController> logger)
+        public GuardController(
+            ILogger<GuardController> logger,
+            IDbUserManager userManager,
+            IDbDirectoryManager directoryManager,
+            IDbFileManager fileManager)
         {
-            _logger = logger;
+            this.logger = logger;
+            this.userManager = userManager;
+            this.directoryManager = directoryManager;
+            this.fileManager = fileManager;
         }
 
-        /// <inheritdoc />
-        public async Task<bool> RegisterNewUser(string email, string passwordHash, string salt, string userId)
+        [HttpPost]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> RegisterNewUser(UserCreationRequest request)
         {
-            throw new NotImplementedException();
+            if (!IdGenerator.IsType(request.UserId, IdType.User))
+                return BadRequest();
+            
+            
+            var rootDirectoryId = IdGenerator.NewId(IdType.Directory);
+
+            try
+            {
+                var successful = await userManager.InsertUser(
+                    request.UserId,
+                    rootDirectoryId,
+                    request.Email,
+                    request.HashedPassword,
+                    request.Salt,
+                    request.PublicKey,
+                    request.EncryptedPrivateKey);
+                
+                if (!successful)
+                    return BadRequest();
+            }
+            catch (InvalidParameterException)
+            {
+                throw;
+            }
+            catch (ObjectNotResolvableException)
+            {
+                throw;
+            }
+            catch (UnexpectedBehaviourException)
+            {
+                throw;
+            }
+            catch (DatabaseException e)
+            {
+                throw new DatabaseException("Database error during file delete. See inner exception.", e);
+            }
+            catch (Exception e)
+            {
+                throw new Exception("Unknown error during file delete. See inner exception.", e);
+            }
+
+
+
+            return Ok();
         }
 
         /// <inheritdoc />
